@@ -2,13 +2,12 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { ApiClientError, apiRequest } from '../lib/api-client';
-import { AuditOverview, CurrencyAmounts } from '../lib/payroll';
+import { AuditOverview, CurrencyAmounts, currentMonth as getCurrentMonth } from '../lib/payroll';
 import { AuditTrailPanel, CurrencyAmountsView } from './payroll-ui';
 import { StatusMessage } from './form-controls';
 
 export function AuditWorkspace() {
-  const currentMonth = new Date().toISOString().slice(0, 7);
-  const [year, setYear] = useState(currentMonth.slice(0, 4));
+  const currentMonth = getCurrentMonth();
   const [month, setMonth] = useState(currentMonth);
   const [userId, setUserId] = useState('');
   const [overview, setOverview] = useState<AuditOverview | null>(null);
@@ -18,7 +17,7 @@ export function AuditWorkspace() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const query = new URLSearchParams({ year, month });
+      const query = new URLSearchParams({ year: month.slice(0, 4), month });
       if (userId) query.set('userId', userId);
       const result = await apiRequest<{ overview: AuditOverview }>(`/api/audit/overview?${query}`);
       setOverview(result.overview);
@@ -28,18 +27,18 @@ export function AuditWorkspace() {
     } finally {
       setLoading(false);
     }
-  }, [month, userId, year]);
+  }, [month, userId]);
 
   useEffect(() => {
     let cancelled = false;
-    const query = new URLSearchParams({ year, month });
+    const query = new URLSearchParams({ year: month.slice(0, 4), month });
     if (userId) query.set('userId', userId);
     void apiRequest<{ overview: AuditOverview }>(`/api/audit/overview?${query}`)
       .then((result) => { if (!cancelled) { setOverview(result.overview); setMessage(''); } })
       .catch((error) => { if (!cancelled) setMessage(errorText(error)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [month, userId, year]);
+  }, [month, userId]);
 
   return (
     <section className="content-card audit-workspace">
@@ -48,10 +47,10 @@ export function AuditWorkspace() {
         <button type="button" className="secondary-button" disabled={loading} onClick={() => void load()}>刷新</button>
       </div>
       <div className="audit-filters">
-        <label><span>年度</span><input type="number" min="2000" max="2100" value={year} onChange={(event) => { const next = event.target.value.slice(0, 4); setYear(next); if (/^\d{4}$/.test(next)) setMonth(`${next}-${month.slice(5)}`); }} /></label>
-        <label><span>工作月份</span><input type="month" value={month} onChange={(event) => { setMonth(event.target.value); setYear(event.target.value.slice(0, 4)); }} /></label>
-        <label><span>按账号追踪</span><select value={userId} onChange={(event) => setUserId(event.target.value)}><option value="">不限账号</option>{overview?.employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName} · {employee.email}</option>)}</select></label>
+        <label><span>工作月份（同时决定年度）</span><input type="month" value={month} onChange={(event) => setMonth(event.target.value || currentMonth)} /></label>
+        <label><span>按员工账号筛选全部汇总</span><select value={userId} onChange={(event) => setUserId(event.target.value)}><option value="">全部账号</option>{overview?.employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName} · {employee.email}</option>)}</select></label>
       </div>
+      {userId && <p className="audit-scope-note">账号筛选已生效：下方当月、年度、逐月及部门数据均只统计所选员工。</p>}
       <StatusMessage message={message} tone="error" />
       {loading && !overview ? <div className="empty-state">正在生成总审计…</div> : overview && <>
         <div className="summary-grid summary-grid--three">

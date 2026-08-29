@@ -192,15 +192,23 @@ export default function HomePage() {
     } : current);
   };
 
-  const applySalaryRecords = async () => {
+  const applySalaryRecords = async (month: string) => {
     if (!activeAccount) throw new Error('登录状态已过期。');
-    const result = await apiRequest<{ records: SalaryRecord[] }>(`/api/salary-records/apply/${activeAccount.id}`, { method: 'POST' });
+    const result = await apiRequest<{ records: SalaryRecord[] }>(`/api/salary-records/apply/${activeAccount.id}`, {
+      method: 'POST',
+      body: { month },
+    });
     const applied = new Map(result.records.map((record) => [record.id, record]));
     setActiveAccount((current) => current ? {
       ...current,
       salaryRecords: current.salaryRecords.map((record) => applied.get(record.id) ?? record),
     } : current);
     return result.records.length;
+  };
+
+  const refreshSalaryRecords = async () => {
+    const result = await apiRequest<{ records: SalaryRecord[] }>('/api/salary-records');
+    setActiveAccount((current) => current ? { ...current, salaryRecords: result.records } : current);
   };
 
   const uploadFile = async (file: File) => {
@@ -227,6 +235,7 @@ export default function HomePage() {
       onSave={saveSalaryRecord}
       onDelete={deleteSalaryRecord}
       onApply={applySalaryRecords}
+      onRefresh={refreshSalaryRecords}
       onUpload={uploadFile}
     />
   ) : route === '/pay/history' ? (

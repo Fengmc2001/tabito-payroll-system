@@ -9,6 +9,7 @@ import {
   Profile,
   ROLE_LABELS,
   STATUS,
+  currentMonth,
   getApplyTypeLabel,
   getDepartmentLabel,
 } from '../lib/payroll';
@@ -19,7 +20,7 @@ export function EmployeeWorkspace() {
   const [employees, setEmployees] = useState<EmployeeSummary[]>([]);
   const [selectedId, setSelectedId] = useState('');
   const [detail, setDetail] = useState<EmployeeDetail | null>(null);
-  const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [month, setMonth] = useState(currentMonth);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
 

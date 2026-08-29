@@ -308,7 +308,12 @@ export const createEmptyProfile = (): Profile => ({
 });
 
 export function today() {
-  return new Date().toISOString().slice(0, 10);
+  const date = new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+export function currentMonth() {
+  return today().slice(0, 7);
 }
 
 export function createRecord(userId: string): SalaryRecord {

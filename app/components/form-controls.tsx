@@ -1,6 +1,6 @@
 'use client';
 
-import { ChangeEvent, ReactNode, useId, useState } from 'react';
+import { ChangeEvent, ReactNode, useEffect, useId, useState } from 'react';
 
 export function Field({
   label,
@@ -62,11 +62,20 @@ export function FileNameInput({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const changeFiles = async (event: ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files ?? []).slice(0, Math.max(0, maximum - value.length));
+    const selectedFiles = Array.from(event.target.files ?? []);
+    const remaining = Math.max(0, maximum - value.length);
     event.target.value = '';
-    if (files.length === 0) return;
+    if (selectedFiles.length === 0) return;
+    if (remaining === 0) {
+      setError(`最多只能上传 ${maximum} 个文件，请先移除已有文件。`);
+      return;
+    }
+    const files = selectedFiles.slice(0, remaining);
+    const limitWarning = selectedFiles.length > remaining
+      ? `最多只能上传 ${maximum} 个文件，本次仅保留前 ${remaining} 个。`
+      : '';
     setBusy(true);
-    setError('');
+    setError(limitWarning);
     try {
       const names = onUpload ? await Promise.all(files.map(onUpload)) : files.map((file) => file.name);
       onChange([...value, ...names].slice(0, maximum));
@@ -90,7 +99,10 @@ export function FileNameInput({
               <button
                 type="button"
                 aria-label={`移除 ${name}`}
-                onClick={() => onChange(value.filter((_, itemIndex) => itemIndex !== index))}
+                onClick={() => {
+                  setError('');
+                  onChange(value.filter((_, itemIndex) => itemIndex !== index));
+                }}
               >
                 ×
               </button>
@@ -98,7 +110,7 @@ export function FileNameInput({
           ))}
         </ul>
       )}
-      {error && <small className="file-picker__error">{error}</small>}
+      <StatusMessage message={error} tone="error" />
     </div>
   );
 }
@@ -115,6 +127,39 @@ export function StatusMessage({
   message: string;
   tone?: 'success' | 'error' | 'info';
 }) {
+  const [popupVisible, setPopupVisible] = useState(Boolean(message));
+
+  useEffect(() => {
+    const showTimer = window.setTimeout(() => setPopupVisible(Boolean(message)), 0);
+    if (!message) {
+      return () => window.clearTimeout(showTimer);
+    }
+    const hideTimer = window.setTimeout(() => setPopupVisible(false), 6000);
+    return () => {
+      window.clearTimeout(showTimer);
+      window.clearTimeout(hideTimer);
+    };
+  }, [message, tone]);
+
   if (!message) return null;
-  return <p className={`status-message status-message--${tone}`} role="status">{message}</p>;
+  const title = tone === 'error' ? '操作警示' : tone === 'success' ? '操作成功' : '系统提示';
+  const icon = tone === 'error' ? '!' : tone === 'success' ? '✓' : 'i';
+
+  return (
+    <>
+      <p className={`status-message status-message--${tone}`} role={tone === 'error' ? 'alert' : 'status'}>{message}</p>
+      {popupVisible && (
+        <div
+          className={`notification-popup notification-popup--${tone}`}
+          role="alertdialog"
+          aria-modal="false"
+          aria-label={title}
+        >
+          <span className="notification-popup__icon" aria-hidden="true">{icon}</span>
+          <div><strong>{title}</strong><p>{message}</p></div>
+          <button type="button" aria-label="关闭提示弹窗" onClick={() => setPopupVisible(false)}>×</button>
+        </div>
+      )}
+    </>
+  );
 }

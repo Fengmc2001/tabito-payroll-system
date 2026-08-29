@@ -202,6 +202,53 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
 .status-message--error { color: #a5262c; background: #fff0f0; }
 .status-message--info { color: #456191; background: #eef4ff; }
 
+.notification-popup {
+  position: fixed;
+  z-index: 80;
+  top: 22px;
+  right: 22px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 11px;
+  width: min(410px, calc(100vw - 32px));
+  border: 1px solid #c7d0e2;
+  border-left-width: 4px;
+  border-radius: 8px;
+  padding: 14px 14px 14px 13px;
+  color: #34415d;
+  background: #fff;
+  box-shadow: 0 16px 42px rgb(15 27 58 / 24%);
+  animation: notification-popup-in 180ms ease-out;
+}
+
+.notification-popup--success { border-left-color: #3f976d; }
+.notification-popup--error { border-left-color: #c94f55; }
+.notification-popup--info { border-left-color: #5379bd; }
+.notification-popup__icon {
+  display: grid;
+  width: 25px;
+  height: 25px;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: #5379bd;
+  font-size: 13px;
+  font-weight: 900;
+}
+.notification-popup--success .notification-popup__icon { background: #3f976d; }
+.notification-popup--error .notification-popup__icon { background: #c94f55; }
+.notification-popup > div { min-width: 0; }
+.notification-popup strong { display: block; color: var(--xly-navy-deep); font-size: 13px; }
+.notification-popup p { margin: 3px 0 0; color: #596783; font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.notification-popup > button { border: 0; padding: 0 2px; color: #8a94a8; background: transparent; font-size: 20px; line-height: 1; }
+.notification-popup > button:hover { color: var(--xly-navy); }
+
+@keyframes notification-popup-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: 248px minmax(0, 1fr);
@@ -399,9 +446,11 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
 .file-picker__list button:hover { color: var(--xly-danger); }
 
 .heading-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
+.salary-workspace__heading .heading-actions { align-items: flex-end; }
 
 .summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 24px; }
 .summary-grid--three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.summary-grid--five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 
 .summary-card {
   display: grid;
@@ -440,6 +489,41 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
 .data-table tr:hover td { background: #fbfcfe; }
 .row-actions { display: flex; align-items: center; gap: 11px; white-space: nowrap; }
 .row-actions .danger-text { color: var(--xly-danger); }
+
+.salary-draft-section { margin-bottom: 24px; }
+.salary-status-sections { display: grid; gap: 20px; }
+.salary-record-section {
+  border: 2px solid var(--xly-border);
+  border-radius: 9px;
+  padding: 17px;
+  background: #fff;
+}
+.salary-record-section--pending { border-color: #e2b45c; background: #fffcf5; }
+.salary-record-section--rejected { border-color: #db8589; background: #fff9f9; }
+.salary-record-section--approved { border-color: #68aa86; background: #f7fcf9; }
+.salary-record-section__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+.salary-record-section__heading > div { display: grid; gap: 5px; }
+.salary-record-section__heading h2 { margin: 0; color: var(--xly-navy-deep); font-size: 15px; }
+.salary-record-section__heading p { margin: 0; color: var(--xly-muted); font-size: 11px; }
+.salary-record-section__heading > span {
+  border-radius: 999px;
+  padding: 4px 9px;
+  color: #596783;
+  background: #eef1f6;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.salary-record-section--pending .salary-record-section__heading > span { color: #8a5a0c; background: #ffedc8; }
+.salary-record-section--rejected .salary-record-section__heading > span { color: #9a2930; background: #ffe5e6; }
+.salary-record-section--approved .salary-record-section__heading > span { color: #176d4c; background: #dcf2e6; }
+.empty-state--compact { min-height: 86px; }
 
 .status-badge { display: inline-flex; align-items: center; border-radius: 3px; padding: 3px 7px; font-size: 11px; font-weight: 700; white-space: nowrap; }
 .status-badge--draft { color: #53627e; background: #eef0f5; }
@@ -710,8 +794,9 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
 .employee-record-list p { margin: 8px 0 0; color: #53617f; font-size: 12px; line-height: 1.6; }
 .employee-record-list .attachment-links { margin: 10px 0 0; }
 
-.audit-filters { display: grid; grid-template-columns: 150px 180px minmax(240px, 1fr); gap: 14px; margin: -4px 0 24px; border: 1px solid var(--xly-border); border-radius: 6px; padding: 14px; background: #f8faff; }
+.audit-filters { display: grid; grid-template-columns: 210px minmax(260px, 1fr); gap: 14px; margin: -4px 0 14px; border: 1px solid var(--xly-border); border-radius: 6px; padding: 14px; background: #f8faff; }
 .audit-filters label { display: grid; gap: 5px; color: #596783; font-size: 11px; font-weight: 700; }
+.audit-scope-note { margin: 0 0 22px; border-left: 3px solid #5379bd; padding: 8px 11px; color: #456191; background: #eef4ff; font-size: 11px; line-height: 1.55; }
 
 @media (max-width: 900px) {
   .app-shell { display: block; }
@@ -742,7 +827,6 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
   .employee-directory button { flex: 0 0 190px; }
   .profile-readonly-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .audit-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .audit-filters label:last-child { grid-column: 1 / -1; }
 }
 
 @media (max-width: 640px) {
@@ -774,7 +858,6 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
   .department-add-form,
   .audit-filters,
   .profile-readonly-grid { grid-template-columns: 1fr; }
-  .audit-filters label:last-child { grid-column: auto; }
   .employee-detail__heading { align-items: flex-start; flex-direction: column; }
   .form-actions { justify-content: stretch; }
   .form-actions .primary-button { width: 100%; }
@@ -792,4 +875,9 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
   .record-modal__footer > div button { flex: 1; }
   .salary-calculation span { border-right: 0; border-bottom: 1px solid #dbe2f0; }
   .salary-calculation span:last-child { border-bottom: 0; }
+  .notification-popup { top: 12px; right: 16px; left: 16px; width: auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notification-popup { animation: none; }
 }

@@ -196,7 +196,11 @@ await expect(`/api/users/${secondUser.id}`, 403, 'employee cannot update another
 
 const salaryId = `salary-${randomUUID()}`;
 const cnySalaryId = `salary-${randomUUID()}`;
+const otherMonthSalaryId = `salary-${randomUUID()}`;
 const workDate = new Date().toISOString().slice(0, 10);
+const otherMonth = new Date(`${workDate}T00:00:00Z`);
+otherMonth.setUTCMonth(otherMonth.getUTCMonth() - 1);
+const otherMonthWorkDate = otherMonth.toISOString().slice(0, 10);
 const forgedRecord = {
   id: salaryId,
   userId: employee.id,
@@ -259,16 +263,35 @@ const cnyRecord = await request('/api/salary-records', {
 expectStatus(cnyRecord, 201, 'employee can create a CNY draft');
 assert(cnyRecord.data.record.currency === 'CNY' && cnyRecord.data.record.finalSalary === 8000, 'CNY currency and amount are persisted independently');
 
+const otherMonthRecord = await request('/api/salary-records', {
+  method: 'POST', cookie: employeeCookie, body: {
+    ...forgedRecord,
+    id: otherMonthSalaryId,
+    workDate: otherMonthWorkDate,
+    departmentKey: 'dept-teaching',
+    departmentLabel: '',
+    rate: 7000,
+    attachments: [],
+  },
+});
+expectStatus(otherMonthRecord, 201, 'employee can create a draft in another work month');
+
 await expect(`/api/salary-records/${salaryId}`, 404, 'other employee cannot read the record', { cookie: secondCookie });
 await expect(`/api/salary-records/${salaryId}`, 403, 'other employee cannot overwrite the record', {
   method: 'PATCH', cookie: secondCookie, body: { ...forgedRecord, userId: secondUser.id },
 });
 await expect(`/api/files?key=${encodeURIComponent(fileKey)}`, 403, 'other employee cannot read the attachment', { cookie: secondCookie });
 
-const applied = await request(`/api/salary-records/apply/${employee.id}`, { method: 'POST', cookie: employeeCookie });
-expectStatus(applied, 200, 'employee can submit complete draft');
+const applied = await request(`/api/salary-records/apply/${employee.id}`, {
+  method: 'POST', cookie: employeeCookie, body: { month: workDate.slice(0, 7) },
+});
+expectStatus(applied, 200, 'employee can submit drafts for the selected work month');
 assert(applied.data.records.some((record) => record.id === salaryId && record.status === 2), 'submitted record becomes pending');
 assert(applied.data.records.some((record) => record.id === cnySalaryId && record.status === 2), 'CNY submitted record becomes pending');
+assert(!applied.data.records.some((record) => record.id === otherMonthSalaryId), 'submitting one month does not submit another month');
+const untouchedOtherMonth = await request(`/api/salary-records/${otherMonthSalaryId}`, { cookie: employeeCookie });
+expectStatus(untouchedOtherMonth, 200, 'other-month draft remains readable');
+assert(untouchedOtherMonth.data.record.status === 1, 'other-month draft remains unsubmitted');
 await expect(`/api/files?key=${encodeURIComponent(fileKey)}`, 409, 'referenced attachment cannot be deleted', {
   method: 'DELETE', cookie: employeeCookie,
 });
@@ -322,6 +345,11 @@ expectStatus(overview, 200, 'reviewer can open monthly and annual total audit');
 assert(overview.data.overview.monthSummary.approvedAmounts.JPY === 5000, 'monthly audit totals approved JPY independently');
 assert(overview.data.overview.monthSummary.rejectedAmounts.CNY === 8000, 'monthly audit totals rejected CNY independently');
 assert(overview.data.overview.accountLogs.length > 0, 'total audit traces the selected account by month');
+const emptyAccountOverview = await request(`/api/audit/overview?year=${workDate.slice(0, 4)}&month=${auditMonth}&userId=${lockUser.id}`, { cookie: secondCookie });
+expectStatus(emptyAccountOverview, 200, 'total audit accepts an employee account with no salary records');
+assert(emptyAccountOverview.data.overview.monthSummary.recordCount === 0, 'account filter excludes other employees from monthly totals');
+assert(emptyAccountOverview.data.overview.yearSummary.recordCount === 0, 'account filter excludes other employees from annual totals');
+assert(emptyAccountOverview.data.overview.departmentSummaries.length === 0, 'account filter excludes other employees from department totals');
 await expect(`/api/review/salary-records/${salaryId}`, 409, 'reviewer cannot process the same record twice', {
   method: 'PATCH', cookie: secondCookie, body: { decision: 'reject', auditMemo: 'duplicate' },
 });

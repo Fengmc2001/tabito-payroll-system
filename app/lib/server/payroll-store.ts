@@ -21,6 +21,7 @@ import {
   StoredAccount,
   StoredFileInfo,
   createEmptyProfile,
+  currentMonth,
   emptyCurrencyAmounts,
   getDepartmentLabel,
   profileBasicsAreReady,
@@ -531,23 +532,25 @@ export async function deleteSalaryRecord(userId: string, id: string) {
   await writeAudit(db, userId, 'salary.delete', 'salary_record', id);
 }
 
-export async function applySalaryRecords(userId: string) {
+export async function applySalaryRecords(userId: string, requestedMonth?: string) {
   const db = await database();
   const user = await getUserById(userId);
   if (!user) throw new ApiError(404, '未找到用户。');
   const profileError = profileSubmissionError(parseProfile(user.profile_json));
   if (profileError) throw new ApiError(400, profileError);
+  const month = requestedMonth ?? currentMonth();
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new ApiError(400, '申报月份格式无效。');
   const records = await listSalaryRecords(userId);
   const now = new Date().toISOString();
   const drafts = records
-    .filter((record) => record.status === 1)
+    .filter((record) => record.status === 1 && record.workDate.startsWith(month))
     .map((record) => ({ ...record, status: 2 as const, checkDate: null, auditMemo: '', updatedAt: now }));
-  if (drafts.length === 0) throw new ApiError(400, '没有可提交的工资记录。');
+  if (drafts.length === 0) throw new ApiError(400, `${month} 没有可提交的工资记录。`);
 
   await db.batch(drafts.map((record) => db.prepare(`UPDATE payroll_salary_records
     SET status = 2, data_json = ?, updated_at = ? WHERE id = ? AND user_id = ? AND status = 1`)
     .bind(JSON.stringify(record), now, record.id, userId)));
-  await writeAudit(db, userId, 'salary.submit', 'user', userId, { recordIds: drafts.map((record) => record.id) });
+  await writeAudit(db, userId, 'salary.submit', 'user', userId, { month, recordIds: drafts.map((record) => record.id) });
   return drafts;
 }
 
@@ -795,16 +798,19 @@ export async function getAuditOverview(
   const result = await db.prepare(`SELECT id, user_id, status, currency, data_json
     FROM payroll_salary_records WHERE status IN (2, 3, 4) AND work_date LIKE ?
     ORDER BY work_date DESC, updated_at DESC`).bind(`${year}-%`).all<RecordRow>();
-  const records = result.results.map(recordFromRow);
+  const employees = await listStaffEmployeesInternal(db);
+  if (input.userId && !employees.some((employee) => employee.id === input.userId)) {
+    throw new ApiError(404, '未找到要追踪的账号。');
+  }
+  const allRecords = result.results.map(recordFromRow);
+  const records = input.userId
+    ? allRecords.filter((record) => record.userId === input.userId)
+    : allRecords;
   const monthRecords = records.filter((record) => record.workDate.startsWith(month));
   const departments = new Map<string, SalaryRecord[]>();
   for (const record of monthRecords) {
     const label = getDepartmentLabel(record.departmentKey, record.departmentLabel);
     departments.set(label, [...(departments.get(label) ?? []), record]);
-  }
-  const employees = await listStaffEmployeesInternal(db);
-  if (input.userId && !employees.some((employee) => employee.id === input.userId)) {
-    throw new ApiError(404, '未找到要追踪的账号。');
   }
   return {
     year,

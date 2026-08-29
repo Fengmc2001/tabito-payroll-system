@@ -6,7 +6,8 @@ export async function POST(request: Request, context: RouteContext) {
   try {
     const { userId } = await context.params;
     await requireSession(request, userId);
-    return json({ records: await applySalaryRecords(userId) });
+    const body = await request.json().catch(() => ({})) as { month?: unknown };
+    return json({ records: await applySalaryRecords(userId, typeof body.month === 'string' ? body.month : undefined) });
   } catch (error) {
     return errorResponse(error);
   }

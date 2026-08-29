@@ -12,6 +12,7 @@ import {
   SalaryRecord,
   STATUS,
   cloneAsDraft,
+  currentMonth,
   createRecord,
   emptyCurrencyAmounts,
   formatHours,
@@ -36,15 +37,19 @@ export function SalaryWorkspace({
   onSave,
   onDelete,
   onApply,
+  onRefresh,
   onUpload,
 }: {
   userId: string;
   records: SalaryRecord[];
   onSave: (record: SalaryRecord) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
-  onApply: () => Promise<number>;
+  onApply: (month: string) => Promise<number>;
+  onRefresh: () => Promise<void>;
   onUpload?: (file: File) => Promise<string>;
 }) {
+  const naturalMonth = currentMonth();
+  const [month, setMonth] = useState(naturalMonth);
   const [editing, setEditing] = useState<SalaryRecord | null>(null);
   const [notice, setNotice] = useState('');
   const [noticeTone, setNoticeTone] = useState<'success' | 'error' | 'info'>('info');
@@ -63,9 +68,19 @@ export function SalaryWorkspace({
     return () => { cancelled = true; };
   }, []);
   const currentRecords = records
-    .filter((record) => record.status !== 3)
+    .filter((record) => record.workDate.startsWith(month))
     .sort((left, right) => right.workDate.localeCompare(left.workDate));
+  const drafts = currentRecords.filter((record) => record.status === 1);
+  const pending = currentRecords.filter((record) => record.status === 2);
+  const approved = currentRecords.filter((record) => record.status === 3);
+  const rejected = currentRecords.filter((record) => record.status === 4);
   const summary = useMemo(() => summarize(currentRecords), [currentRecords]);
+
+  const openNewRecord = () => {
+    const record = createRecord(userId);
+    if (!record.workDate.startsWith(month)) record.workDate = `${month}-01`;
+    setEditing(record);
+  };
 
   const save = (next: SalaryRecord) => {
     setBusy(true);
@@ -102,15 +117,26 @@ export function SalaryWorkspace({
   };
 
   const apply = () => {
-    const drafts = records.filter((record) => record.status === 1);
     if (drafts.length === 0) {
+      setNoticeTone('info');
       setNotice('没有可提交的工资记录。');
       return;
     }
     setBusy(true);
-    void onApply().then((count) => {
+    void onApply(month).then((count) => {
       setNoticeTone('success');
-      setNotice(`已提交 ${count} 条记录，等待审核。`);
+      setNotice(`已提交 ${month} 的 ${count} 条记录，等待审核。`);
+    }).catch((error) => {
+      setNoticeTone('error');
+      setNotice(messageFrom(error));
+    }).finally(() => setBusy(false));
+  };
+
+  const refresh = () => {
+    setBusy(true);
+    void onRefresh().then(() => {
+      setNoticeTone('success');
+      setNotice(`${month} 的工资状态已刷新。`);
     }).catch((error) => {
       setNoticeTone('error');
       setNotice(messageFrom(error));
@@ -126,15 +152,18 @@ export function SalaryWorkspace({
           <p>请核对工作日期、所属部门、计费方式和附件后再提交审核。</p>
         </div>
         <div className="heading-actions">
-          <button type="button" className="secondary-button" disabled={busy} onClick={() => setEditing(createRecord(userId))}>+ 新建工资记录</button>
+          <label className="month-picker"><span>申报月份</span><input type="month" value={month} onChange={(event) => setMonth(event.target.value || naturalMonth)} /></label>
+          <button type="button" className="secondary-button" disabled={busy} onClick={refresh}>刷新状态</button>
+          <button type="button" className="secondary-button" disabled={busy} onClick={openNewRecord}>+ 新建工资记录</button>
           <button type="button" className="primary-button" disabled={busy} onClick={apply}>{busy ? '处理中…' : '提交本期记录'}</button>
         </div>
       </div>
 
-      <div className="summary-grid">
-        <SummaryCard label="本页总额" value={<CurrencyAmountsView amounts={summary.total} />} />
+      <div className="summary-grid summary-grid--five">
+        <SummaryCard label={`${month} 全部记录`} value={<CurrencyAmountsView amounts={summary.total} />} />
         <SummaryCard label="未提交" value={<CurrencyAmountsView amounts={summary.draft} />} tone="draft" />
-        <SummaryCard label="待审核" value={<CurrencyAmountsView amounts={summary.pending} />} tone="pending" />
+        <SummaryCard label="已提交 / 待审核" value={<CurrencyAmountsView amounts={summary.pending} />} tone="pending" />
+        <SummaryCard label="已审核 / 通过" value={<CurrencyAmountsView amounts={summary.approved} />} tone="approved" />
         <SummaryCard label="已驳回" value={<CurrencyAmountsView amounts={summary.rejected} />} tone="rejected" />
       </div>
 
@@ -145,7 +174,16 @@ export function SalaryWorkspace({
         <span>跨日工作请拆分为两条记录。</span>
       </div>
 
-      <SalaryTable records={currentRecords} onEdit={setEditing} onCopy={copy} onDelete={remove} />
+      <section className="salary-draft-section">
+        <div className="salary-record-section__heading"><div><h2>未提交记录</h2><p>只有这里的记录可以编辑、删除或提交。</p></div><span>{drafts.length} 条</span></div>
+        <SalaryTable records={drafts} onEdit={setEditing} onCopy={copy} onDelete={remove} emptyMessage="本月没有未提交记录。" />
+      </section>
+
+      <div className="salary-status-sections">
+        <SalaryStatusSection tone="pending" title="已提交 · 待审核" records={pending} onCopy={copy} />
+        <SalaryStatusSection tone="rejected" title="已驳回" records={rejected} onCopy={copy} />
+        <SalaryStatusSection tone="approved" title="已审核 · 通过" records={approved} onCopy={copy} />
+      </div>
 
       {editing && (
         <SalaryRecordDialog
@@ -162,7 +200,7 @@ export function SalaryWorkspace({
 }
 
 export function SalaryHistory({ records }: { records: SalaryRecord[] }) {
-  const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [month, setMonth] = useState(currentMonth);
   const approved = records
     .filter((record) => record.status === 3 && record.workDate.startsWith(month))
     .sort((left, right) => right.workDate.localeCompare(left.workDate));
@@ -176,7 +214,7 @@ export function SalaryHistory({ records }: { records: SalaryRecord[] }) {
         <div>
           <p className="eyebrow">工资历史</p>
           <h1>往期工资一览</h1>
-          <p>只展示审核通过的工资记录。支付日为次月 10 日，周末或节假日顺延。</p>
+          <p>只展示审核通过的工资记录。</p>
         </div>
         <label className="month-picker">
           <span>月份</span>
@@ -245,14 +283,16 @@ function SalaryTable({
   onEdit,
   onCopy,
   onDelete,
+  emptyMessage = '尚未创建工资记录。',
 }: {
   records: SalaryRecord[];
   onEdit: (record: SalaryRecord) => void;
   onCopy: (record: SalaryRecord) => void;
   onDelete: (id: string) => void;
+  emptyMessage?: string;
 }) {
   if (records.length === 0) {
-    return <div className="empty-state">尚未创建工资记录。</div>;
+    return <div className="empty-state empty-state--compact">{emptyMessage}</div>;
   }
 
   return (
@@ -293,6 +333,34 @@ function SalaryTable({
         </tbody>
       </table>
     </div>
+  );
+}
+
+function SalaryStatusSection({
+  tone,
+  title,
+  records,
+  onCopy,
+}: {
+  tone: 'pending' | 'approved' | 'rejected';
+  title: string;
+  records: SalaryRecord[];
+  onCopy: (record: SalaryRecord) => void;
+}) {
+  return (
+    <section className={`salary-record-section salary-record-section--${tone}`}>
+      <div className="salary-record-section__heading">
+        <div><h2>{title}</h2><CurrencyAmountsView amounts={sumAmounts(records)} /></div>
+        <span>{records.length} 条</span>
+      </div>
+      <SalaryTable
+        records={records}
+        onEdit={() => undefined}
+        onCopy={onCopy}
+        onDelete={() => undefined}
+        emptyMessage={`本月没有${title.replace(' · ', '')}记录。`}
+      />
+    </section>
   );
 }
 
@@ -347,8 +415,28 @@ function SalaryRecordDialog({
       setError('“特殊（具体备注）”必须填写具体工作内容或备注。');
       return;
     }
+    if (completed.finalSalary > 100_000_000) {
+      setError('工资金额不能超过 100,000,000；请检查单价、数量和交通费。');
+      return;
+    }
     setError('');
     onSave(completed);
+  };
+
+  const reportInvalid = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const control = event.target as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+    const label = control.closest('label')?.querySelector('.form-field__label')?.textContent?.replace('*', '').trim() || '该字段';
+    const message = control.validity.rangeOverflow
+      ? `不能超过 ${control.getAttribute('max')}。`
+      : control.validity.rangeUnderflow
+        ? `不能低于 ${control.getAttribute('min')}。`
+        : control.validity.tooLong
+          ? `不能超过 ${control.getAttribute('maxlength')} 个字符。`
+          : control.validity.valueMissing
+            ? '为必填项。'
+            : '填写内容不符合要求。';
+    setError(`${label}${message}`);
   };
 
   return (
@@ -362,7 +450,7 @@ function SalaryRecordDialog({
           <button type="button" className="icon-button" aria-label="关闭" onClick={onClose}>×</button>
         </header>
 
-        <form onSubmit={submit}>
+        <form onSubmit={submit} onInvalidCapture={reportInvalid}>
           <div className="record-modal__body">
             <FormSection title="工作信息">
               <div className="form-grid form-grid--two">
@@ -392,10 +480,10 @@ function SalaryRecordDialog({
                   </select>
                 </Field>
                 <Field label="工作内容" required={draft.applyType === 7}>
-                  <textarea rows={3} value={draft.workContent} onChange={(event) => update('workContent', event.target.value)} />
+                  <textarea rows={3} maxLength={2000} value={draft.workContent} onChange={(event) => update('workContent', event.target.value)} />
                 </Field>
                 <Field label="备注">
-                  <textarea rows={3} value={draft.memo} onChange={(event) => update('memo', event.target.value)} />
+                  <textarea rows={3} maxLength={2000} value={draft.memo} onChange={(event) => update('memo', event.target.value)} />
                 </Field>
               </div>
             </FormSection>
@@ -409,7 +497,7 @@ function SalaryRecordDialog({
               <div className="form-grid form-grid--two">
                 {showRate && (
                   <Field label="工作单价" required>
-                    <input type="number" min="0" step="1" value={draft.rate} onChange={(event) => update('rate', Number(event.target.value))} />
+                    <input type="number" min="0" max="10000000" step="1" value={draft.rate} onChange={(event) => update('rate', Number(event.target.value))} />
                   </Field>
                 )}
                 {showTime && (
@@ -430,22 +518,22 @@ function SalaryRecordDialog({
                 )}
                 {showAmount && (
                   <Field label={draft.applyType === 2 ? '件数' : draft.applyType === 3 ? '字数' : '人数'} required>
-                    <input type="number" min="0" step="1" value={draft.amount} onChange={(event) => update('amount', Number(event.target.value))} />
+                    <input type="number" min="0" max="10000000" step="1" value={draft.amount} onChange={(event) => update('amount', Number(event.target.value))} />
                   </Field>
                 )}
                 {showTravel && (
                   <Field label="交通起点">
-                    <input value={draft.travelStart} onChange={(event) => update('travelStart', event.target.value)} />
+                    <input maxLength={300} value={draft.travelStart} onChange={(event) => update('travelStart', event.target.value)} />
                   </Field>
                 )}
                 {showTravel && (
                   <Field label="交通终点">
-                    <input value={draft.travelEnd} onChange={(event) => update('travelEnd', event.target.value)} />
+                    <input maxLength={300} value={draft.travelEnd} onChange={(event) => update('travelEnd', event.target.value)} />
                   </Field>
                 )}
                 {showTravel && (
                   <Field label="交通费（往返）">
-                    <input type="number" min="0" step="1" value={draft.travelFee} onChange={(event) => update('travelFee', Number(event.target.value))} />
+                    <input type="number" min="0" max="10000000" step="1" value={draft.travelFee} onChange={(event) => update('travelFee', Number(event.target.value))} />
                   </Field>
                 )}
                 <Field label="附件">
@@ -473,6 +561,7 @@ function summarize(records: SalaryRecord[]) {
       summary.total[record.currency] += record.finalSalary;
       if (record.status === 1) summary.draft[record.currency] += record.finalSalary;
       if (record.status === 2) summary.pending[record.currency] += record.finalSalary;
+      if (record.status === 3) summary.approved[record.currency] += record.finalSalary;
       if (record.status === 4) summary.rejected[record.currency] += record.finalSalary;
       return summary;
     },
@@ -480,6 +569,7 @@ function summarize(records: SalaryRecord[]) {
       total: emptyCurrencyAmounts(),
       draft: emptyCurrencyAmounts(),
       pending: emptyCurrencyAmounts(),
+      approved: emptyCurrencyAmounts(),
       rejected: emptyCurrencyAmounts(),
     },
   );

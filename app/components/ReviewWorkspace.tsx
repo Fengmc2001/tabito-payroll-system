@@ -8,6 +8,7 @@ import {
   ReviewSalaryItem,
   SalaryStatus,
   STATUS,
+  currentMonth,
   emptyCurrencyAmounts,
   formatHours,
   getApplyTypeLabel,
@@ -22,7 +23,7 @@ export function ReviewWorkspace() {
   const [items, setItems] = useState<ReviewSalaryItem[]>([]);
   const [logs, setLogs] = useState<AuditLogItem[]>([]);
   const [filter, setFilter] = useState<Filter>('all');
-  const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [month, setMonth] = useState(currentMonth);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState('');
