@@ -5,18 +5,17 @@ import { FileNameInput, Field, FormSection, StatusMessage } from './form-control
 import { apiRequest } from '../lib/api-client';
 import {
   APPLY_TYPES,
-  CHECK_USERS,
   CURRENCIES,
   CurrencyAmounts,
   DepartmentOption,
   SalaryRecord,
   STATUS,
+  WorkManagerOption,
   cloneAsDraft,
   currentMonth,
   createRecord,
   emptyCurrencyAmounts,
   formatHours,
-  formatMoney,
   getApplyTypeLabel,
   getDepartmentLabel,
   nextPaymentDate,
@@ -29,6 +28,12 @@ const TIME_OPTIONS = Array.from({ length: 289 }, (_, index) => {
   const hours = Math.floor(index / 12);
   const minutes = (index % 12) * 5;
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+});
+
+const REST_OPTIONS = Array.from({ length: 289 }, (_, index) => {
+  const hours = Math.floor(index / 12);
+  const minutes = (index % 12) * 5;
+  return { value: Number((index / 12).toFixed(2)), label: `${hours} 小时 ${String(minutes).padStart(2, '0')} 分钟` };
 });
 
 export function SalaryWorkspace({
@@ -55,10 +60,11 @@ export function SalaryWorkspace({
   const [noticeTone, setNoticeTone] = useState<'success' | 'error' | 'info'>('info');
   const [busy, setBusy] = useState(false);
   const [departments, setDepartments] = useState<DepartmentOption[]>([]);
+  const [workManagers, setWorkManagers] = useState<WorkManagerOption[]>([]);
   useEffect(() => {
     let cancelled = false;
-    void apiRequest<{ departments: DepartmentOption[] }>('/api/payroll-options')
-      .then((result) => { if (!cancelled) setDepartments(result.departments); })
+    void apiRequest<{ departments: DepartmentOption[]; workManagers: WorkManagerOption[] }>('/api/payroll-options')
+      .then((result) => { if (!cancelled) { setDepartments(result.departments); setWorkManagers(result.workManagers); } })
       .catch((error) => {
         if (!cancelled) {
           setNoticeTone('error');
@@ -87,7 +93,7 @@ export function SalaryWorkspace({
     void onSave(next).then(() => {
       setEditing(null);
       setNoticeTone('success');
-      setNotice('工资记录已保存，金额已由服务器重新核算。');
+      setNotice('工资记录已保存。');
     }).catch((error) => {
       setNoticeTone('error');
       setNotice(messageFrom(error));
@@ -111,6 +117,9 @@ export function SalaryWorkspace({
       copyDraft.departmentKey = '';
       copyDraft.departmentLabel = '';
     }
+    const manager = workManagers.find((item) => item.id === copyDraft.checkUserId || item.label === copyDraft.checkUser);
+    copyDraft.checkUserId = manager?.id ?? '';
+    copyDraft.checkUser = manager?.label ?? '';
     setEditing(copyDraft);
     setNoticeTone('info');
     setNotice('已复制为一条新的未提交记录。');
@@ -147,9 +156,8 @@ export function SalaryWorkspace({
     <section className="content-card salary-workspace">
       <div className="content-card__heading salary-workspace__heading">
         <div>
-          <p className="eyebrow">工资申报</p>
+          <p className="eyebrow">02 工资申报</p>
           <h1>本期工资申报</h1>
-          <p>请核对工作日期、所属部门、计费方式和附件后再提交审核。</p>
         </div>
         <div className="heading-actions">
           <label className="month-picker"><span>申报月份</span><input type="month" value={month} onChange={(event) => setMonth(event.target.value || naturalMonth)} /></label>
@@ -162,27 +170,22 @@ export function SalaryWorkspace({
       <div className="summary-grid summary-grid--five">
         <SummaryCard label={`${month} 全部记录`} value={<CurrencyAmountsView amounts={summary.total} />} />
         <SummaryCard label="未提交" value={<CurrencyAmountsView amounts={summary.draft} />} tone="draft" />
-        <SummaryCard label="已提交 / 待审核" value={<CurrencyAmountsView amounts={summary.pending} />} tone="pending" />
-        <SummaryCard label="已审核 / 通过" value={<CurrencyAmountsView amounts={summary.approved} />} tone="approved" />
+        <SummaryCard label="待审核" value={<CurrencyAmountsView amounts={summary.pending} />} tone="pending" />
+        <SummaryCard label="已通过" value={<CurrencyAmountsView amounts={summary.approved} />} tone="approved" />
         <SummaryCard label="已驳回" value={<CurrencyAmountsView amounts={summary.rejected} />} tone="rejected" />
       </div>
 
       <StatusMessage message={notice} tone={noticeTone} />
 
-      <div className="info-callout">
-        <strong>申报说明</strong>
-        <span>跨日工作请拆分为两条记录。</span>
-      </div>
-
       <section className="salary-draft-section">
-        <div className="salary-record-section__heading"><div><h2>未提交记录</h2><p>只有这里的记录可以编辑、删除或提交。</p></div><span>{drafts.length} 条</span></div>
+        <div className="salary-record-section__heading"><div><h2>未提交记录</h2></div><span>{drafts.length} 条</span></div>
         <SalaryTable records={drafts} onEdit={setEditing} onCopy={copy} onDelete={remove} emptyMessage="本月没有未提交记录。" />
       </section>
 
       <div className="salary-status-sections">
-        <SalaryStatusSection tone="pending" title="已提交 · 待审核" records={pending} onCopy={copy} />
+        <SalaryStatusSection tone="pending" title="待审核" records={pending} onCopy={copy} />
         <SalaryStatusSection tone="rejected" title="已驳回" records={rejected} onCopy={copy} />
-        <SalaryStatusSection tone="approved" title="已审核 · 通过" records={approved} onCopy={copy} />
+        <SalaryStatusSection tone="approved" title="已通过" records={approved} onCopy={copy} />
       </div>
 
       {editing && (
@@ -190,6 +193,7 @@ export function SalaryWorkspace({
           key={editing.id}
           initial={editing}
           departments={departments}
+          workManagers={workManagers}
           onClose={() => setEditing(null)}
           onSave={save}
           onUpload={onUpload}
@@ -212,9 +216,8 @@ export function SalaryHistory({ records }: { records: SalaryRecord[] }) {
     <section className="content-card history-workspace">
       <div className="content-card__heading history-workspace__heading">
         <div>
-          <p className="eyebrow">工资历史</p>
+          <p className="eyebrow">03 往期工资</p>
           <h1>往期工资一览</h1>
-          <p>只展示审核通过的工资记录。</p>
         </div>
         <label className="month-picker">
           <span>月份</span>
@@ -367,17 +370,22 @@ function SalaryStatusSection({
 function SalaryRecordDialog({
   initial,
   departments,
+  workManagers,
   onClose,
   onSave,
   onUpload,
 }: {
   initial: SalaryRecord;
   departments: DepartmentOption[];
+  workManagers: WorkManagerOption[];
   onClose: () => void;
   onSave: (record: SalaryRecord) => void;
   onUpload?: (file: File) => Promise<string>;
 }) {
-  const [draft, setDraft] = useState(() => recalculateRecord(initial));
+  const [draft, setDraft] = useState(() => {
+    const manager = workManagers.find((item) => item.id === initial.checkUserId || item.label === initial.checkUser);
+    return recalculateRecord({ ...initial, checkUserId: manager?.id ?? '', checkUser: manager?.label ?? '' });
+  });
   const [error, setError] = useState('');
   const allowedTypes = APPLY_TYPES.map((item) => item.value);
   const showRate = draft.applyType !== 5;
@@ -392,6 +400,11 @@ function SalaryRecordDialog({
         const nextDepartment = departments.find((item) => item.key === value);
         next.departmentLabel = nextDepartment?.label ?? '';
       }
+      if (field === 'checkUserId') {
+        const manager = workManagers.find((item) => item.id === value);
+        next.checkUser = manager?.label ?? '';
+      }
+      if (field === 'applyType' && value !== 1 && value !== 7) next.restHours = 0;
       return recalculateRecord(next);
     });
   };
@@ -399,12 +412,16 @@ function SalaryRecordDialog({
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const completed = recalculateRecord({ ...draft, updatedAt: new Date().toISOString() });
-    if (!completed.workDate || !completed.checkUser || !completed.departmentKey) {
+    if (!completed.workDate || !completed.checkUserId || !completed.checkUser || !completed.departmentKey) {
       setError('日期、工作负责人和工作所属部门为必填项。');
       return;
     }
-    if (showTime && (!completed.startTime || !completed.endTime || completed.workHours <= 0)) {
+    if (showTime && (!completed.startTime || !completed.endTime || completed.totalHours <= 0)) {
       setError('请填写同一天内、结束时间晚于开始时间的工作时间；跨日工作请拆分记录。');
+      return;
+    }
+    if (showTime && completed.restHours > completed.totalHours) {
+      setError('中间休息时间不能超过开始至结束的总时长。');
       return;
     }
     if (completed.applyType === 7 && !completed.workContent.trim()) {
@@ -444,7 +461,6 @@ function SalaryRecordDialog({
       <section className="record-modal" role="dialog" aria-modal="true" aria-labelledby="record-dialog-title">
         <header className="record-modal__header">
           <div>
-            <p className="eyebrow">工资记录</p>
             <h2 id="record-dialog-title">{initial.createdAt === initial.updatedAt ? '新建工资记录' : '编辑工资记录'}</h2>
           </div>
           <button type="button" className="icon-button" aria-label="关闭" onClick={onClose}>×</button>
@@ -458,9 +474,9 @@ function SalaryRecordDialog({
                   <input type="date" value={draft.workDate} onChange={(event) => update('workDate', event.target.value)} required />
                 </Field>
                 <Field label="工作负责人" required>
-                  <select value={draft.checkUser} onChange={(event) => update('checkUser', event.target.value)} required>
+                  <select value={draft.checkUserId} onChange={(event) => update('checkUserId', event.target.value)} required>
                     <option value="">请选择</option>
-                    {CHECK_USERS.map((user) => <option key={user} value={user}>{user}</option>)}
+                    {workManagers.map((manager) => <option key={manager.id} value={manager.id}>{manager.label}</option>)}
                   </select>
                 </Field>
                 <Field label="工作所属部门" required>
@@ -471,7 +487,7 @@ function SalaryRecordDialog({
                 </Field>
                 <Field label="货币" required>
                   <select value={draft.currency} onChange={(event) => update('currency', event.target.value as SalaryRecord['currency'])} required>
-                    {CURRENCIES.map((item) => <option key={item.value} value={item.value}>{item.label}（{item.symbol}）</option>)}
+                    {CURRENCIES.map((item) => <option key={item.value} value={item.value}>{item.label} {item.value}</option>)}
                   </select>
                 </Field>
                 <Field label="计费方式" required>
@@ -490,9 +506,10 @@ function SalaryRecordDialog({
 
             <FormSection title="计费与时间">
               <div className="salary-calculation">
-                <span><b>劳动时间</b>{formatHours(draft.workHours)} 小时</span>
+                <span><b>总时长</b>{formatHours(draft.totalHours)} 小时</span>
                 <span><b>休息时间</b>{formatHours(draft.restHours)} 小时</span>
-                <span className="salary-calculation__result"><b>工作收入</b>{formatMoney(draft.finalSalary, draft.currency)}</span>
+                <span><b>计薪劳动时间</b>{formatHours(draft.workHours)} 小时</span>
+                <span className="salary-calculation__result"><b>工作收入</b><Money amount={draft.finalSalary} currency={draft.currency} /></span>
               </div>
               <div className="form-grid form-grid--two">
                 {showRate && (
@@ -513,6 +530,13 @@ function SalaryRecordDialog({
                     <select value={draft.endTime} onChange={(event) => update('endTime', event.target.value)}>
                       <option value="">请选择</option>
                       {TIME_OPTIONS.map((time) => <option key={time} value={time}>{time}</option>)}
+                    </select>
+                  </Field>
+                )}
+                {showTime && (
+                  <Field label="中间休息时间" hint="从工作时长中扣除。">
+                    <select value={draft.restHours} onChange={(event) => update('restHours', Number(event.target.value))}>
+                      {REST_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
                     </select>
                   </Field>
                 )}

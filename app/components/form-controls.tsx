@@ -89,7 +89,7 @@ export function FileNameInput({
   return (
     <div className="file-picker">
       <input id={id} type="file" accept={accept} multiple={maximum > 1} onChange={changeFiles} />
-      <label className="secondary-button file-picker__button" htmlFor={id}>{busy ? '上传中…' : '+ Upload'}</label>
+      <label className="secondary-button file-picker__button" htmlFor={id}>{busy ? '上传中…' : '+ 上传文件'}</label>
       <span className="file-picker__limit">最多 {maximum} 个图片/PDF</span>
       {value.length > 0 && (
         <ul className="file-picker__list">

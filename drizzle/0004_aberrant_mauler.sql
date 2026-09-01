@@ -1,0 +1,1 @@
+ALTER TABLE `payroll_users` ADD `work_manager` integer DEFAULT false NOT NULL;

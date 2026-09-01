@@ -2,7 +2,7 @@
 
 import { FormEvent, useState } from 'react';
 import { FileNameInput, Field, FormSection, StatusMessage } from './form-controls';
-import { Profile } from '../lib/payroll';
+import { Profile, birthdayIsValid, today } from '../lib/payroll';
 
 type ProfileTab = 'basic' | 'documents' | 'payment' | 'password';
 
@@ -50,22 +50,22 @@ export function ProfileEditor({
       return;
     }
 
-    if (!firstTime && tab === 'basic' && !draft.birthday) {
+    if (draft.birthday && !birthdayIsValid(draft.birthday)) {
       setMessageTone('error');
-      setMessage('请填写生日。');
+      setMessage('生日必须是四位年份的有效日期，例如 1992-01-01。');
+      setTab('basic');
+      return;
+    }
+    if (!firstTime && tab === 'basic' && !birthdayIsValid(draft.birthday)) {
+      setMessageTone('error');
+      setMessage('请填写四位年份的有效生日。');
       return;
     }
 
     if (!firstTime && tab === 'documents') {
-      if (!draft.idType || !draft.dependents) {
+      if (!draft.idType) {
         setMessageTone('error');
-        setMessage('请填写证件类型与抚养信息。');
-        return;
-      }
-      const expectedIdFiles = draft.idType === 'passport' ? 1 : 2;
-      if (draft.idFileNames.length !== expectedIdFiles) {
-        setMessageTone('error');
-        setMessage(`身份证件需要上传 ${expectedIdFiles} 个文件。`);
+        setMessage('请选择身份证件类型。');
         return;
       }
     }
@@ -75,6 +75,11 @@ export function ProfileEditor({
     )) {
       setMessageTone('error');
       setMessage('请补全工资收款方式、账户名称、账号和账户姓名。');
+      return;
+    }
+    if (!firstTime && tab === 'payment' && (draft.bankFileNames.length < 1 || draft.bankFileNames.length > 2)) {
+      setMessageTone('error');
+      setMessage('银行卡正反面至少上传 1 个附件，最多 2 个。');
       return;
     }
 
@@ -94,9 +99,9 @@ export function ProfileEditor({
     <section className="content-card profile-editor">
       <div className="content-card__heading">
         <div>
-          <p className="eyebrow">个人资料</p>
+          <p className="eyebrow">01 个人资料</p>
           <h1>{firstTime ? '首次资料完善' : '个人&账户信息'}</h1>
-          <p>{firstTime ? '首次注册后必须先提交姓名、现住址与联系方式。联系方式可以分多行填写。' : '个人资料变更后，请在此处保存。'}</p>
+          {firstTime && <p>请先填写姓名、现住址和联系方式。</p>}
         </div>
       </div>
 
@@ -156,7 +161,7 @@ function BasicFields({
   setField: <K extends keyof Profile>(field: K, value: Profile[K]) => void;
 }) {
   return (
-    <FormSection title="基本信息" description="请按证件上的信息填写姓名。">
+    <FormSection title="基本信息">
       <div className="form-grid form-grid--two">
         <Field label="中文姓" required>
           <input value={draft.lastNameCn} onChange={(event) => setField('lastNameCn', event.target.value)} required />
@@ -176,8 +181,8 @@ function BasicFields({
         <Field label="片假名名">
           <input value={draft.firstNameKana} onChange={(event) => setField('firstNameKana', event.target.value)} />
         </Field>
-        <Field label="生日" required={!firstTime} hint={firstTime ? '首次资料可稍后补充。' : '例如：1992-01-01'}>
-          <input type="date" value={draft.birthday} onChange={(event) => setField('birthday', event.target.value)} required={!firstTime} />
+        <Field label="生日" required={!firstTime}>
+          <input type="date" min="1000-01-01" max={today()} value={draft.birthday} onChange={(event) => setField('birthday', event.target.value)} required={!firstTime} />
         </Field>
         <Field label="性别">
           <select value={draft.gender} onChange={(event) => setField('gender', event.target.value as Profile['gender'])}>
@@ -187,7 +192,7 @@ function BasicFields({
             <option value="其他">其他</option>
           </select>
         </Field>
-        <Field label="现住址" required hint="请填写当前可联系到本人的住址。">
+        <Field label="现住址" required>
           <textarea rows={3} value={draft.address} onChange={(event) => setField('address', event.target.value)} required />
         </Field>
         <Field label="联系方式" required hint="可分行填写手机号、微信、邮箱或紧急联系人。">
@@ -212,7 +217,7 @@ function DocumentFields({
   const isChinaId = draft.idType === 'china-id';
 
   return (
-    <FormSection title="证件信息" description="有在留卡时必须选择在留卡；护照上传 1 张，其余证件上传正反面共 2 张。">
+    <FormSection title="证件信息">
       <div className="form-grid form-grid--two">
         <Field label="身份证件类型选择" required>
           <select value={draft.idType} onChange={(event) => setField('idType', event.target.value as Profile['idType'])} required>
@@ -222,7 +227,7 @@ function DocumentFields({
             <option value="passport">护照</option>
           </select>
         </Field>
-        <Field label="登录身份证件上传" required hint={draft.idType ? `当前需上传 ${expected} 个文件。` : '请先选择证件类型。'}>
+        <Field label="登录身份证件上传">
           <FileNameInput value={draft.idFileNames} maximum={expected} onUpload={onUpload} onChange={(files) => setField('idFileNames', files)} />
         </Field>
         <Field label="国籍" required={isChinaId}>
@@ -240,7 +245,7 @@ function DocumentFields({
           </Field>
         )}
         {isResidence && (
-          <Field label="资格外活动许可" required>
+          <Field label="资格外活动许可">
             <select value={draft.activityPermission} onChange={(event) => setField('activityPermission', event.target.value as Profile['activityPermission'])}>
               <option value="">请选择</option>
               <option value="有">有</option>
@@ -248,7 +253,7 @@ function DocumentFields({
             </select>
           </Field>
         )}
-        <Field label="抚养" required>
+        <Field label="抚养">
           <select value={draft.dependents} onChange={(event) => setField('dependents', event.target.value as Profile['dependents'])}>
             <option value="">请选择</option>
             <option value="有">有</option>
@@ -292,7 +297,7 @@ function PaymentFields({
   const isAlipay = draft.bankType === 'alipay';
 
   return (
-    <FormSection title="工资收款账户" description="请填写能够接收工资的账户；如收款人不是本人，请补充收款人信息。">
+    <FormSection title="工资收款账户">
       <div className="form-grid form-grid--two">
         <Field label="工资收款方式" required>
           <select value={draft.bankType} onChange={(event) => setField('bankType', event.target.value as Profile['bankType'])} required>
@@ -302,7 +307,7 @@ function PaymentFields({
             <option value="alipay">支付宝</option>
           </select>
         </Field>
-        <Field label="银行卡/账户凭证上传" hint="需要上传正反面时请上传 2 个文件。">
+        <Field label="银行卡正反面" required hint="至少上传 1 个附件，最多 2 个。">
           <FileNameInput value={draft.bankFileNames} maximum={2} onUpload={onUpload} onChange={(files) => setField('bankFileNames', files)} />
         </Field>
         <Field label={isAlipay ? '支付宝账户' : '银行名称'} required>

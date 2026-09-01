@@ -5,7 +5,6 @@ import {
   AuditLogItem,
   AuditOverview,
   BOOTSTRAP_ADMIN_EMAIL,
-  CHECK_USERS,
   CurrencyAmounts,
   CurrencyCode,
   DEFAULT_DEPARTMENTS,
@@ -20,11 +19,15 @@ import {
   SalaryStatus,
   StoredAccount,
   StoredFileInfo,
+  TransferSheetRow,
+  WorkManagerOption,
+  birthdayIsValid,
   createEmptyProfile,
   currentMonth,
   emptyCurrencyAmounts,
   getDepartmentLabel,
   profileBasicsAreReady,
+  profileMissingRequirements,
   recalculateRecord,
 } from '../payroll';
 
@@ -38,6 +41,7 @@ type UserRow = {
   last_login_at: string | null;
   failed_login_count: number;
   locked_until: number | null;
+  work_manager: number;
   created_at: string;
   updated_at: string;
 };
@@ -78,6 +82,7 @@ type AuditRow = {
   id: string;
   actor_user_id: string | null;
   actor_email: string | null;
+  actor_profile_json: string | null;
   action: string;
   target_type: string;
   target_id: string;
@@ -143,6 +148,7 @@ async function initializeSchema(db: D1Database) {
       last_login_at TEXT,
       failed_login_count INTEGER NOT NULL DEFAULT 0,
       locked_until INTEGER,
+      work_manager INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )`),
@@ -245,6 +251,24 @@ async function initializeSchema(db: D1Database) {
       .run();
   }
 
+  const workManagerBackfill = await db.prepare("SELECT value FROM payroll_settings WHERE key = 'work_manager_backfilled_v1'")
+    .first<{ value: string }>();
+  if (workManagerBackfill?.value !== '1') {
+    const workManagerCount = await db.prepare('SELECT COUNT(*) AS count FROM payroll_users WHERE work_manager = 1')
+      .first<{ count: number }>();
+    if (Number(workManagerCount?.count ?? 0) === 0) {
+      await db.prepare(`UPDATE payroll_users SET work_manager = 1, updated_at = ?
+        WHERE id = (SELECT id FROM payroll_users WHERE role = 'admin' AND status = 'active' ORDER BY created_at ASC LIMIT 1)`)
+        .bind(new Date().toISOString())
+        .run();
+    }
+    await db.prepare(`INSERT INTO payroll_settings (key, value, updated_by, updated_at)
+      VALUES ('work_manager_backfilled_v1', '1', NULL, ?)
+      ON CONFLICT(key) DO UPDATE SET value = '1', updated_at = excluded.updated_at`)
+      .bind(new Date().toISOString())
+      .run();
+  }
+
   const referenceBackfill = await db.prepare("SELECT value FROM payroll_settings WHERE key = 'file_references_backfilled_v1'")
     .first<{ value: string }>();
   if (referenceBackfill?.value !== '1') {
@@ -280,6 +304,7 @@ async function ensureUserColumns(db: D1Database) {
     ['last_login_at', 'TEXT'],
     ['failed_login_count', 'INTEGER NOT NULL DEFAULT 0'],
     ['locked_until', 'INTEGER'],
+    ['work_manager', 'INTEGER NOT NULL DEFAULT 0'],
   ];
   for (const [name, definition] of additions) {
     if (!existing.has(name)) {
@@ -308,10 +333,12 @@ export async function registerUser(email: string, passwordDigest: string) {
   try {
     await db.prepare(`INSERT INTO payroll_users (
       id, email, password_digest, profile_json, role, status, last_login_at,
-      failed_login_count, locked_until, created_at, updated_at
+      failed_login_count, locked_until, work_manager, created_at, updated_at
     ) SELECT ?, ?, ?, ?,
       CASE WHEN EXISTS (SELECT 1 FROM payroll_users LIMIT 1) THEN 'employee' ELSE 'admin' END,
-      'active', ?, 0, NULL, ?, ?`)
+      'active', ?, 0, NULL,
+      CASE WHEN EXISTS (SELECT 1 FROM payroll_users LIMIT 1) THEN 0 ELSE 1 END,
+      ?, ?`)
       .bind(id, normalized, passwordHash, JSON.stringify(profile), now, now, now)
       .run();
   } catch (error) {
@@ -625,7 +652,7 @@ export async function listManagedUsers(actor: SessionActor): Promise<ManagedUser
 export async function updateManagedUser(
   actor: SessionActor,
   targetUserId: string,
-  input: { role?: AccountRole; status?: AccountStatus; revokeSessions?: boolean },
+  input: { role?: AccountRole; status?: AccountStatus; workManager?: boolean; revokeSessions?: boolean },
 ) {
   requireRole(actor, ['admin']);
   const db = await database();
@@ -633,6 +660,7 @@ export async function updateManagedUser(
   if (!target) throw new ApiError(404, '未找到用户。');
   const nextRole = input.role ?? toRole(target.role);
   const nextStatus = input.status ?? toStatus(target.status);
+  const nextWorkManager = typeof input.workManager === 'boolean' ? input.workManager : Boolean(target.work_manager);
   if (!isRole(nextRole) || !isStatus(nextStatus)) throw new ApiError(400, '账号角色或状态无效。');
   if (actor.userId === targetUserId && nextStatus === 'disabled') {
     throw new ApiError(400, '管理员不能停用自己的账号。');
@@ -650,15 +678,15 @@ export async function updateManagedUser(
   }
 
   const now = new Date().toISOString();
-  await db.prepare('UPDATE payroll_users SET role = ?, status = ?, updated_at = ? WHERE id = ?')
-    .bind(nextRole, nextStatus, now, targetUserId)
+  await db.prepare('UPDATE payroll_users SET role = ?, status = ?, work_manager = ?, updated_at = ? WHERE id = ?')
+    .bind(nextRole, nextStatus, nextWorkManager ? 1 : 0, now, targetUserId)
     .run();
   if (nextStatus === 'disabled' || input.revokeSessions) {
     await db.prepare('DELETE FROM payroll_sessions WHERE user_id = ?').bind(targetUserId).run();
   }
   await writeAudit(db, actor.userId, 'account.permission_update', 'user', targetUserId, {
-    from: { role: toRole(target.role), status: toStatus(target.status) },
-    to: { role: nextRole, status: nextStatus },
+    from: { role: toRole(target.role), status: toStatus(target.status), workManager: Boolean(target.work_manager) },
+    to: { role: nextRole, status: nextStatus, workManager: nextWorkManager },
     sessionsRevoked: Boolean(input.revokeSessions || nextStatus === 'disabled'),
   });
   const updated = await getUserById(targetUserId);
@@ -709,6 +737,12 @@ export async function listPayrollDepartments(actor: SessionActor): Promise<Depar
   const result = await db.prepare(`SELECT id, label, active, sort_order, created_at, updated_at
     FROM payroll_departments WHERE active = 1 ORDER BY sort_order ASC, created_at ASC`).all<DepartmentRow>();
   return result.results.map(toDepartmentOption);
+}
+
+export async function listPayrollWorkManagers(actor: SessionActor): Promise<WorkManagerOption[]> {
+  requireRole(actor, ['employee', 'reviewer', 'admin']);
+  const db = await database();
+  return activeWorkManagers(db);
 }
 
 export async function listAdminDepartments(actor: SessionActor): Promise<DepartmentOption[]> {
@@ -783,6 +817,38 @@ export async function getStaffEmployeeDetail(actor: SessionActor, targetUserId: 
     monthlySummaries: monthlySummaries(salaryRecords),
     auditLogs: await queryAccountAuditLogs(db, targetUserId),
   };
+}
+
+export async function getStaffTransferSheet(actor: SessionActor, requestedMonth?: string): Promise<TransferSheetRow[]> {
+  requireRole(actor, ['reviewer', 'admin']);
+  const month = requestedMonth || currentMonth();
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new ApiError(400, '查看月份格式无效。');
+  const db = await database();
+  const [usersResult, recordsResult, filesResult] = await Promise.all([
+    db.prepare('SELECT * FROM payroll_users ORDER BY created_at ASC').all<UserRow>(),
+    db.prepare(`SELECT id, user_id, status, currency, data_json FROM payroll_salary_records
+      WHERE status = 3 AND work_date LIKE ? ORDER BY work_date DESC, created_at DESC`)
+      .bind(`${month}-%`).all<RecordRow>(),
+    db.prepare(`SELECT f.key, f.user_id, f.original_name, f.content_type, f.size, f.created_at,
+      GROUP_CONCAT(DISTINCT r.reference_type) AS reference_types
+      FROM payroll_files f LEFT JOIN payroll_file_references r ON r.file_key = f.key
+      WHERE f.content_type = 'application/pdf'
+      GROUP BY f.key ORDER BY f.created_at DESC`).all<StaffFileRow>(),
+  ]);
+  const recordsByUser = new Map<string, SalaryRecord[]>();
+  for (const row of recordsResult.results) {
+    recordsByUser.set(row.user_id, [...(recordsByUser.get(row.user_id) ?? []), recordFromRow(row)]);
+  }
+  const filesByUser = new Map<string, StoredFileInfo[]>();
+  for (const row of filesResult.results) {
+    filesByUser.set(row.user_id, [...(filesByUser.get(row.user_id) ?? []), toStoredFileInfo(row)]);
+  }
+  return usersResult.results.map((row) => ({
+    user: toManagedUser(row),
+    profile: parseProfile(row.profile_json),
+    approvedAmounts: sumByCurrency(recordsByUser.get(row.id) ?? []),
+    pdfFiles: filesByUser.get(row.id) ?? [],
+  }));
 }
 
 export async function getAuditOverview(
@@ -988,6 +1054,7 @@ function toManagedUser(row: UserRow): ManagedUser {
     displayName: profileDisplayName(profile, row.email),
     role: toRole(row.role),
     status: toStatus(row.status),
+    workManager: Boolean(row.work_manager),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastLoginAt: row.last_login_at,
@@ -1017,8 +1084,14 @@ function sanitizeProfile(input: Profile) {
   profile.dependents = ['', '有', '无'].includes(profile.dependents) ? profile.dependents : '';
   profile.bankType = ['', 'jp-bank', 'cn-bank', 'alipay'].includes(profile.bankType) ? profile.bankType : '';
   profile.payeeIsSelf = ['', '是', '否'].includes(profile.payeeIsSelf) ? profile.payeeIsSelf : '';
+  if (Array.isArray(source.bankFileNames) && source.bankFileNames.length > 2) {
+    throw new ApiError(400, '银行卡正反面最多上传 2 个附件。');
+  }
   profile.idFileNames = cleanFileKeys(source.idFileNames, 2);
   profile.bankFileNames = cleanFileKeys(source.bankFileNames, 2);
+  if (profile.birthday && !birthdayIsValid(profile.birthday)) {
+    throw new ApiError(400, '生日必须使用四位年份的有效日期，例如 1992-01-01。');
+  }
   return profile;
 }
 
@@ -1040,8 +1113,8 @@ async function sanitizeSalaryRecord(
   const applyType = Number(input.applyType) as SalaryRecord['applyType'];
   if (!department || ![1, 2, 3, 4, 5, 6, 7].includes(applyType)) throw new ApiError(400, '部门或计费方式无效。');
   const currency = sanitizeCurrency(input.currency);
-  const checkUser = cleanString(input.checkUser, 100);
-  if (!CHECK_USERS.includes(checkUser)) throw new ApiError(400, '工作负责人无效。');
+  const workManager = await resolveWorkManager(db, input.checkUserId, input.checkUser);
+  if (!workManager) throw new ApiError(400, '工作负责人无效或已停用。');
   const attachments = cleanFileKeys(input.attachments, 8);
   await assertOwnedFiles(db, userId, attachments);
   const now = new Date().toISOString();
@@ -1049,7 +1122,8 @@ async function sanitizeSalaryRecord(
     id,
     userId,
     workDate,
-    checkUser,
+    checkUserId: workManager.id,
+    checkUser: workManager.label,
     departmentKey: department.id,
     departmentLabel: department.label,
     currency,
@@ -1063,8 +1137,9 @@ async function sanitizeSalaryRecord(
     travelStart: cleanString(input.travelStart, 300),
     travelEnd: cleanString(input.travelEnd, 300),
     travelFee: boundedNumber(input.travelFee, 0, 10_000_000),
+    totalHours: 0,
     workHours: 0,
-    restHours: 0,
+    restHours: boundedNumber(input.restHours, 0, 24),
     finalSalary: 0,
     attachments,
     status: 1,
@@ -1073,7 +1148,10 @@ async function sanitizeSalaryRecord(
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   });
-  if ((applyType === 1 || applyType === 7) && record.workHours <= 0) {
+  if ((applyType === 1 || applyType === 7) && record.restHours > record.totalHours) {
+    throw new ApiError(400, '中间休息时间不能超过开始至结束的总时长。');
+  }
+  if ((applyType === 1 || applyType === 7) && record.totalHours <= 0) {
     throw new ApiError(400, '开始和结束时间无效。');
   }
   if (applyType === 7 && !record.workContent) throw new ApiError(400, '“其他”计费方式必须填写工作内容。');
@@ -1095,9 +1173,15 @@ function parseRecord(value: string, rowCurrency?: string) {
     const parsed = JSON.parse(value) as Partial<SalaryRecord>;
     if (!parsed || typeof parsed !== 'object') return null;
     const currency = sanitizeCurrencyLenient(parsed.currency ?? rowCurrency);
+    const restHours = Number.isFinite(Number(parsed.restHours)) ? Number(parsed.restHours) : 0;
+    const workHours = Number.isFinite(Number(parsed.workHours)) ? Number(parsed.workHours) : 0;
     return {
       ...parsed,
       currency,
+      checkUserId: typeof parsed.checkUserId === 'string' ? parsed.checkUserId : '',
+      totalHours: Number.isFinite(Number(parsed.totalHours)) ? Number(parsed.totalHours) : workHours + restHours,
+      workHours,
+      restHours,
       departmentLabel: getDepartmentLabel(parsed.departmentKey ?? '', parsed.departmentLabel),
       attachments: Array.isArray(parsed.attachments) ? parsed.attachments : [],
     } as SalaryRecord;
@@ -1176,7 +1260,7 @@ async function writeAudit(
 }
 
 async function queryAuditLogs(db: D1Database, limit: number) {
-  const result = await db.prepare(`SELECT l.id, l.actor_user_id, u.email AS actor_email,
+  const result = await db.prepare(`SELECT l.id, l.actor_user_id, u.email AS actor_email, u.profile_json AS actor_profile_json,
     l.action, l.target_type, l.target_id, l.detail_json, l.created_at
     FROM payroll_audit_logs l
     LEFT JOIN payroll_users u ON u.id = l.actor_user_id
@@ -1186,7 +1270,7 @@ async function queryAuditLogs(db: D1Database, limit: number) {
 
 async function queryAccountAuditLogs(db: D1Database, userId: string, month?: string) {
   const monthClause = month ? 'AND l.created_at LIKE ?' : '';
-  const statement = db.prepare(`SELECT l.id, l.actor_user_id, u.email AS actor_email,
+  const statement = db.prepare(`SELECT l.id, l.actor_user_id, u.email AS actor_email, u.profile_json AS actor_profile_json,
     l.action, l.target_type, l.target_id, l.detail_json, l.created_at
     FROM payroll_audit_logs l
     LEFT JOIN payroll_users u ON u.id = l.actor_user_id
@@ -1228,6 +1312,23 @@ async function listStaffEmployeesInternal(db: D1Database): Promise<EmployeeSumma
       approvedAmounts: sumByCurrency(records.filter((record) => record.status === 3)),
     };
   });
+}
+
+async function activeWorkManagers(db: D1Database): Promise<WorkManagerOption[]> {
+  const result = await db.prepare(`SELECT * FROM payroll_users
+    WHERE work_manager = 1 AND status = 'active' ORDER BY created_at ASC`).all<UserRow>();
+  return result.results.map((row) => {
+    const profile = parseProfile(row.profile_json);
+    return { id: row.id, label: profileDisplayName(profile, row.email), email: row.email };
+  });
+}
+
+async function resolveWorkManager(db: D1Database, requestedId: unknown, legacyLabel: unknown) {
+  const managers = await activeWorkManagers(db);
+  const id = cleanString(requestedId, 120);
+  if (id) return managers.find((manager) => manager.id === id) ?? null;
+  const label = cleanString(legacyLabel, 100);
+  return managers.find((manager) => manager.label === label || manager.email === label) ?? null;
 }
 
 function monthlySummaries(records: SalaryRecord[]) {
@@ -1278,10 +1379,13 @@ function toStoredFileInfo(row: StaffFileRow): StoredFileInfo {
 }
 
 function toAuditLogItem(row: AuditRow): AuditLogItem {
+  const actorProfile = row.actor_profile_json ? parseProfile(row.actor_profile_json) : null;
+  const actorDisplayName = actorProfile ? profileDisplayName(actorProfile, '') || null : null;
   return {
     id: row.id,
     actorUserId: row.actor_user_id,
     actorEmail: row.actor_email,
+    actorDisplayName,
     action: row.action,
     targetType: row.target_type,
     targetId: row.target_id,
@@ -1422,33 +1526,8 @@ function profileDisplayName(profile: Profile, fallback: string) {
 }
 
 function profileSubmissionError(profile: Profile) {
-  const basicError = profileBasicsError(profile);
-  if (basicError) return basicError;
-  if (!profile.birthday || !profile.idType || !profile.bankType) {
-    return '请先完善生日、证件类型和工资收款方式。';
-  }
-  const expectedIdFiles = profile.idType === 'passport' ? 1 : 2;
-  if (profile.idFileNames.length !== expectedIdFiles) {
-    return `身份证件需要上传 ${expectedIdFiles} 个文件。`;
-  }
-  if (!profile.dependents) return '请填写抚养信息。';
-  if (profile.idType === 'residence' && (!profile.residentStatus || !profile.activityPermission)) {
-    return '请填写在留资格和资格外活动许可。';
-  }
-  if (profile.idType === 'china-id' && (
-    !profile.nationality || !profile.idNumber || !profile.idExpiryDate
-    || !profile.address || !profile.addressOfLicense || !profile.tel
-  )) {
-    return '请补全中国居民身份证及联系信息。';
-  }
-  if (!profile.bankName || !profile.bankAccountNumber || !profile.bankAccountHolder) {
-    return '请补全工资收款账户名称、账号和账户姓名。';
-  }
-  if ((profile.bankType === 'cn-bank' || profile.bankType === 'alipay') && !profile.payeeIsSelf) {
-    return '请确认收款人是否本人。';
-  }
-  if (profile.payeeIsSelf === '否' && !profile.payeeName) return '请填写收款人姓名。';
-  return null;
+  const missing = profileMissingRequirements(profile);
+  return missing.length > 0 ? `请先补全：${missing.join('、')}。` : null;
 }
 
 function profileBasicsError(profile: Profile) {

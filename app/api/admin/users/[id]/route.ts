@@ -10,6 +10,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     const body = await request.json() as {
       role?: AccountRole;
       status?: AccountStatus;
+      workManager?: boolean;
       revokeSessions?: boolean;
     };
     return json({ user: await updateManagedUser(actor, id, body) });

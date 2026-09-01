@@ -98,8 +98,8 @@ export function ReviewWorkspace() {
         : candidate));
       setTone('success');
       setMessage(decision === 'approve'
-        ? '工资记录已审核通过，并继续保留在本月列表。'
-        : '工资记录已驳回，并继续保留在本月列表。');
+        ? '工资已通过。'
+        : '工资已驳回。');
       const recent = await apiRequest<{ logs: AuditLogItem[] }>('/api/audit/recent');
       setLogs(recent.logs);
     } catch (error) {
@@ -114,9 +114,8 @@ export function ReviewWorkspace() {
     <section className="content-card review-workspace">
       <div className="content-card__heading">
         <div>
-          <p className="eyebrow">权限后台</p>
+          <p className="eyebrow">04 工资审核</p>
           <h1>工资审核工作台</h1>
-          <p>按工作月份展示待审核、已通过和已驳回记录；处理后不会从当月消失。</p>
         </div>
         <div className="heading-actions">
           <label className="month-picker"><span>工作月份</span><input type="month" value={month} onChange={(event) => setMonth(event.target.value)} /></label>
@@ -154,7 +153,7 @@ export function ReviewWorkspace() {
             return (
               <article className="review-card" key={record.id}>
                 <header>
-                  <div><strong>{item.user.displayName}</strong><span>{item.user.email}</span></div>
+                  <div><strong>{item.user.displayName}</strong></div>
                   <span className={`status-badge status-badge--${status.tone}`}>{status.label}</span>
                 </header>
                 <dl>
@@ -163,7 +162,7 @@ export function ReviewWorkspace() {
                   <div><dt>所属部门</dt><dd>{getDepartmentLabel(record.departmentKey, record.departmentLabel)}</dd></div>
                   <div><dt>计费方式</dt><dd>{getApplyTypeLabel(record.applyType)}</dd></div>
                   <div><dt>劳动 / 休息</dt><dd>{formatHours(record.workHours)} / {formatHours(record.restHours)} 小时</dd></div>
-                  <div><dt>服务端核算金额</dt><dd className="review-card__amount"><Money amount={record.finalSalary} currency={record.currency} /></dd></div>
+                  <div><dt>工资金额</dt><dd className="review-card__amount"><Money amount={record.finalSalary} currency={record.currency} /></dd></div>
                 </dl>
                 {(record.workContent || record.memo) && <div className="review-card__copy">
                   {record.workContent && <p><b>工作内容：</b>{record.workContent}</p>}

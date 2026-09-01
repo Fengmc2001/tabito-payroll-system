@@ -40,6 +40,9 @@ try {
     bankAccountHolder: 'TABITO ADMIN',
     bankAccountNumber: '0000001',
   });
+  await expect(`/api/admin/users/${adminSession.account.id}`, 200, {
+    method: 'PATCH', cookie: adminCookie, body: { workManager: true },
+  });
 
   let employeeSession = await loginOrRegister(employeeCredentials);
   employeeSession = await saveBasicProfile(employeeSession, {
@@ -75,10 +78,10 @@ try {
     const created = await expect('/api/salary-records', 201, {
       method: 'POST', cookie: employeeSession.cookie, body: {
         id: salaryId, userId: employeeSession.account.id, workDate: timestamp.slice(0, 10),
-        checkUser: '籍诚', departmentKey: 'dept-affairs', departmentLabel: '事务部', currency: spec.currency,
+        checkUserId: adminSession.account.id, checkUser: '系统管理员', departmentKey: 'dept-affairs', departmentLabel: '事务部', currency: spec.currency,
         applyType: 6, workContent: `本地审批演示：${spec.label}`, memo: spec.marker, rate: spec.amount,
         startTime: '', endTime: '', amount: 0, travelStart: '', travelEnd: '', travelFee: 0,
-        workHours: 0, restHours: 0, finalSalary: 0, attachments: [proof.key], status: 1,
+        totalHours: 0, workHours: 0, restHours: 0, finalSalary: 0, attachments: [proof.key], status: 1,
         checkDate: null, auditMemo: '', createdAt: timestamp, updatedAt: timestamp,
       },
     });
@@ -114,9 +117,9 @@ try {
   const registration = await expect('/api/admin/settings', 200, {
     method: 'PATCH',
     cookie: adminCookie,
-    body: { registrationOpen: false },
+    body: { registrationOpen: true },
   });
-  assert(registration.data.settings.registrationOpen === false, '公开注册没有关闭。');
+  assert(registration.data.settings.registrationOpen === true, '公开注册应保持开放。');
 
   process.stdout.write(`${JSON.stringify({
     result: 'READY',
@@ -126,7 +129,7 @@ try {
       { role: 'employee', ...employeeCredentials },
     ],
     pendingSalaries: queuedItems.map((item) => ({ id: item.record.id, employee: employeeCredentials.email, currency: item.record.currency, amount: item.record.finalSalary, status: 'pending' })),
-    registrationOpen: false,
+    registrationOpen: true,
     accountCount: managedUsers.data.users.length,
   }, null, 2)}\n`);
 } catch (error) {
@@ -134,7 +137,7 @@ try {
     await request('/api/admin/settings', {
       method: 'PATCH',
       cookie: adminCookie,
-      body: { registrationOpen: false },
+      body: { registrationOpen: true },
     }).catch(() => {});
   }
   throw error;
@@ -154,6 +157,10 @@ async function completePayrollProfile(session, values) {
   if (!idFileKey) {
     idFileKey = (await uploadDemoPdf(session.cookie, 'demo-passport.pdf', 'Local demo passport')).key;
   }
+  let bankFileKey = session.account.profile.bankFileNames[0];
+  if (!bankFileKey) {
+    bankFileKey = (await uploadDemoPdf(session.cookie, 'demo-bank-card.pdf', 'Local demo bank card')).key;
+  }
   const response = await expect(`/api/users/${session.account.id}`, 200, {
     method: 'PATCH',
     cookie: session.cookie,
@@ -170,6 +177,7 @@ async function completePayrollProfile(session, values) {
         bankType: 'jp-bank',
         bankName: '本地演示银行',
         bankBranch: '测试支店',
+        bankFileNames: [bankFileKey],
         payeeIsSelf: '是',
       },
     },

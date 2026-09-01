@@ -1,18 +1,19 @@
-import { AuditLogItem, CurrencyAmounts, CurrencyCode, formatMoney, getCurrencyLabel } from '../lib/payroll';
+import { AuditLogItem, CurrencyAmounts, CurrencyCode } from '../lib/payroll';
 
 export function CurrencyBadge({ currency }: { currency: CurrencyCode }) {
-  return <span className={`currency-badge currency-badge--${currency.toLowerCase()}`}>{getCurrencyLabel(currency)}</span>;
+  return <span className={`currency-code currency-code--${currency.toLowerCase()}`}>{currency === 'JPY' ? '日元 JPY' : '人民币 CNY'}</span>;
 }
 
 export function Money({ amount, currency }: { amount: number; currency: CurrencyCode }) {
-  return <span className="money-value"><CurrencyBadge currency={currency} /><b>{formatMoney(amount, currency)}</b></span>;
+  return <span className="money-value"><CurrencyBadge currency={currency} /><b>{formatAmount(amount)}</b></span>;
 }
 
 export function CurrencyAmountsView({ amounts }: { amounts: CurrencyAmounts }) {
+  const entries = (['JPY', 'CNY'] as CurrencyCode[]).filter((currency) => amounts[currency] !== 0);
+  if (entries.length === 0) return <span className="currency-empty">—</span>;
   return (
     <span className="currency-totals">
-      <span><CurrencyBadge currency="JPY" />{formatMoney(amounts.JPY, 'JPY')}</span>
-      <span><CurrencyBadge currency="CNY" />{formatMoney(amounts.CNY, 'CNY')}</span>
+      {entries.map((currency) => <span key={currency}><CurrencyBadge currency={currency} /><b>{formatAmount(amounts[currency])}</b></span>)}
     </span>
   );
 }
@@ -21,15 +22,15 @@ export function AuditTrailPanel({ logs, title = '最近后台与业务操作' }:
   return (
     <div className="audit-section">
       <div className="section-heading-inline">
-        <div><p className="eyebrow">审计追踪</p><h2>{title}</h2></div>
+        <div><h2>{title}</h2></div>
         <span>{logs.length > 10 ? `共 ${logs.length} 条` : `最近 ${logs.length} 条`}</span>
       </div>
       {logs.length === 0 ? <div className="empty-state">暂无审计记录。</div> : (
         <div className="audit-list">
           {logs.map((log) => (
             <article key={log.id}>
-              <div><strong>{auditActionLabel(log.action)}</strong><span>{log.actorEmail ?? '系统'}</span></div>
-              <div><code>{log.targetType}:{shortId(log.targetId)}</code><time>{new Date(log.createdAt).toLocaleString('zh-CN')}</time></div>
+              <div><strong>{auditActionLabel(log.action)}</strong><span>{log.actorDisplayName || log.actorEmail || '系统'}</span></div>
+              <div><span>{auditTargetLabel(log.targetType)}</span><time>{new Date(log.createdAt).toLocaleString('zh-CN')}</time></div>
             </article>
           ))}
         </div>
@@ -64,6 +65,24 @@ export function auditActionLabel(action: string) {
   return labels[action] ?? action;
 }
 
-function shortId(value: string) {
-  return value.length > 22 ? `${value.slice(0, 10)}…${value.slice(-8)}` : value;
+function auditTargetLabel(targetType: string) {
+  const labels: Record<string, string> = {
+    account: '账号',
+    authentication: '登录',
+    department: '部门',
+    file: '附件',
+    profile: '个人资料',
+    salary: '工资记录',
+    salary_record: '工资记录',
+    session: '登录',
+    setting: '系统设置',
+    settings: '系统设置',
+    user: '账号',
+  };
+  return labels[targetType] ?? '业务记录';
+}
+
+function formatAmount(value: number) {
+  const safe = Number.isFinite(value) ? Math.floor(value) : 0;
+  return safe.toLocaleString('zh-CN');
 }

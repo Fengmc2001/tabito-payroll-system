@@ -59,6 +59,16 @@ if (!adminAccount.profile.lastNameCn || !adminAccount.profile.firstNameCn || !ad
   adminAccount = onboardAdmin.data.account;
 }
 
+const defaultSettings = await request('/api/admin/settings', { cookie: adminCookie });
+expectStatus(defaultSettings, 200, 'admin can read registration setting');
+assert(defaultSettings.data.settings.registrationOpen === true, 'new-account registration defaults to open on a fresh database');
+
+const managerUpdate = await request(`/api/admin/users/${adminAccount.id}`, {
+  method: 'PATCH', cookie: adminCookie, body: { workManager: true },
+});
+expectStatus(managerUpdate, 200, 'admin can enable an account as a work manager');
+assert(managerUpdate.data.user.workManager === true, 'work-manager permission is persisted');
+
 await expect('/api/admin/settings', 200, 'admin can open registration', {
   cookie: adminCookie,
   method: 'PATCH',
@@ -94,6 +104,9 @@ const employeeOnboarding = await request(`/api/users/${employee.id}`, {
 });
 expectStatus(employeeOnboarding, 200, 'employee can submit mandatory onboarding profile');
 const employeeBasicAccount = employeeOnboarding.data.account;
+await expect(`/api/users/${employee.id}`, 400, 'server rejects a birthday whose year is not exactly four digits', {
+  method: 'PATCH', cookie: employeeCookie, body: { profile: { ...employeeBasicAccount.profile, birthday: '123456-01-01' } },
+});
 
 await expect('/api/admin/users', 403, 'employee cannot list accounts', { cookie: employeeCookie });
 await expect('/api/review/salary-records', 403, 'employee cannot open review queue', { cookie: employeeCookie });
@@ -104,6 +117,7 @@ await expect('/api/admin/departments', 403, 'employee cannot manage department o
 const payrollOptions = await request('/api/payroll-options', { cookie: employeeCookie });
 expectStatus(payrollOptions, 200, 'employee can load active payroll department options');
 assert(['事务部', '教学部', '美术部', '正社员', '特殊（具体备注）'].every((label) => payrollOptions.data.departments.some((item) => item.label === label)), 'all five required default departments are active');
+assert(payrollOptions.data.workManagers.some((item) => item.id === adminAccount.id), 'enabled work manager is available in salary options');
 const departmentCreate = await request('/api/admin/departments', {
   method: 'POST', cookie: adminCookie, body: { label: `审计测试部-${unique}` },
 });
@@ -175,19 +189,72 @@ await expect('/api/uploads', 400, 'disallowed attachment type is rejected', {
   method: 'POST', cookie: employeeCookie, formData: invalidUpload,
 });
 
-const profile = {
+const workDate = new Date().toISOString().slice(0, 10);
+const profileWithoutBankCard = {
   ...employeeBasicAccount.profile,
   birthday: '1990-01-01',
   idType: 'passport',
-  idFileNames: [fileKey],
-  dependents: '无',
+  idFileNames: [],
+  activityPermission: '',
+  dependents: '',
   bankType: 'jp-bank',
   bankName: 'Self Check Bank',
   bankAccountNumber: '1234567',
   bankAccountHolder: 'SELF CHECK',
+  bankFileNames: [],
+};
+await expect(`/api/users/${employee.id}`, 200, 'optional identity, activity-permission and dependent fields can remain empty', {
+  method: 'PATCH', cookie: employeeCookie, body: { profile: profileWithoutBankCard },
+});
+
+const gateDraftId = `salary-${randomUUID()}`;
+const gateDraft = {
+  id: gateDraftId,
+  userId: employee.id,
+  workDate,
+  checkUserId: adminAccount.id,
+  checkUser: 'forged manager label',
+  departmentKey: 'dept-affairs',
+  departmentLabel: '',
+  currency: 'JPY',
+  applyType: 6,
+  workContent: 'Profile gate self-check',
+  memo: '',
+  rate: 1000,
+  startTime: '',
+  endTime: '',
+  amount: 0,
+  travelStart: '',
+  travelEnd: '',
+  travelFee: 0,
+  totalHours: 0,
+  workHours: 0,
+  restHours: 0,
+  finalSalary: 0,
+  attachments: [],
+  status: 1,
+  checkDate: null,
+  auditMemo: '',
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
+};
+await expect('/api/salary-records', 201, 'employee can prepare a draft before the full payment profile is complete', {
+  method: 'POST', cookie: employeeCookie, body: gateDraft,
+});
+const blockedSubmission = await request(`/api/salary-records/apply/${employee.id}`, {
+  method: 'POST', cookie: employeeCookie, body: { month: workDate.slice(0, 7) },
+});
+expectStatus(blockedSubmission, 400, 'salary submission requires at least one bank-card attachment');
+assert(String(blockedSubmission.data.error).includes('银行卡正反面'), 'incomplete-profile response names the missing bank-card attachment');
+await expect(`/api/salary-records/${gateDraftId}`, 200, 'unsubmitted profile-gate test draft can be deleted', {
+  method: 'DELETE', cookie: employeeCookie,
+});
+
+const profile = {
+  ...profileWithoutBankCard,
   bankFileNames: [bankFileKey],
 };
-await expect(`/api/users/${employee.id}`, 200, 'employee can update own complete profile', {
+await expect(`/api/users/${employee.id}`, 200, 'employee can complete payroll profile with one bank-card attachment', {
   method: 'PATCH', cookie: employeeCookie, body: { profile },
 });
 await expect(`/api/users/${secondUser.id}`, 403, 'employee cannot update another profile', {
@@ -197,7 +264,6 @@ await expect(`/api/users/${secondUser.id}`, 403, 'employee cannot update another
 const salaryId = `salary-${randomUUID()}`;
 const cnySalaryId = `salary-${randomUUID()}`;
 const otherMonthSalaryId = `salary-${randomUUID()}`;
-const workDate = new Date().toISOString().slice(0, 10);
 const otherMonth = new Date(`${workDate}T00:00:00Z`);
 otherMonth.setUTCMonth(otherMonth.getUTCMonth() - 1);
 const otherMonthWorkDate = otherMonth.toISOString().slice(0, 10);
@@ -205,7 +271,8 @@ const forgedRecord = {
   id: salaryId,
   userId: employee.id,
   workDate,
-  checkUser: '籍诚',
+  checkUserId: adminAccount.id,
+  checkUser: '伪造负责人名称',
   departmentKey: customDepartment.key,
   departmentLabel: '伪造部门名称',
   currency: 'JPY',
@@ -219,6 +286,7 @@ const forgedRecord = {
   travelStart: '',
   travelEnd: '',
   travelFee: 0,
+  totalHours: 999,
   workHours: 999,
   restHours: 0,
   finalSalary: 99999999,
@@ -237,6 +305,44 @@ assert(created.data.record.workHours === 0, 'server recalculates and ignores for
 assert(created.data.record.auditMemo === '', 'server strips forged audit memo');
 assert(created.data.record.departmentLabel === customDepartment.label, 'server stores the authoritative department label snapshot');
 assert(created.data.record.currency === 'JPY', 'server stores the selected JPY currency');
+assert(created.data.record.checkUserId === adminAccount.id && created.data.record.checkUser !== '伪造负责人名称', 'server stores the authoritative work-manager account and name');
+
+await expect('/api/salary-records', 400, 'an account without work-manager permission cannot be selected', {
+  method: 'POST', cookie: employeeCookie, body: { ...forgedRecord, id: `salary-${randomUUID()}`, checkUserId: secondUser.id },
+});
+
+const restRecordId = `salary-${randomUUID()}`;
+const restRecord = await request('/api/salary-records', {
+  method: 'POST', cookie: employeeCookie, body: {
+    ...forgedRecord,
+    id: restRecordId,
+    departmentKey: 'dept-teaching',
+    departmentLabel: '',
+    applyType: 1,
+    rate: 1000,
+    startTime: '09:00',
+    endTime: '17:00',
+    restHours: 1.5,
+    travelFee: 0,
+    attachments: [],
+  },
+});
+expectStatus(restRecord, 201, 'employee can enter an optional manual break duration');
+assert(restRecord.data.record.totalHours === 8, 'server calculates eight total elapsed hours');
+assert(restRecord.data.record.restHours === 1.5 && restRecord.data.record.workHours === 6.5, 'manual break is deducted from paid work time');
+assert(restRecord.data.record.finalSalary === 6500, 'hourly salary uses paid work time after manual break');
+const noAutomaticRest = await request(`/api/salary-records/${restRecordId}`, {
+  method: 'PATCH', cookie: employeeCookie, body: { ...restRecord.data.record, restHours: 0 },
+});
+expectStatus(noAutomaticRest, 200, 'manual break can be changed back to zero');
+assert(noAutomaticRest.data.record.restHours === 0 && noAutomaticRest.data.record.workHours === 8, 'an eight-hour shift no longer receives an automatic break deduction');
+assert(noAutomaticRest.data.record.finalSalary === 8000, 'zero manual break pays all eight hours');
+await expect('/api/salary-records', 400, 'manual break cannot exceed total elapsed time', {
+  method: 'POST', cookie: employeeCookie, body: { ...forgedRecord, id: `salary-${randomUUID()}`, departmentKey: 'dept-teaching', applyType: 1, startTime: '09:00', endTime: '17:00', restHours: 9, attachments: [] },
+});
+await expect(`/api/salary-records/${restRecordId}`, 200, 'manual-break test draft can be deleted', {
+  method: 'DELETE', cookie: employeeCookie,
+});
 
 const departmentDelete = await request(`/api/admin/departments/${customDepartment.key}`, { method: 'DELETE', cookie: adminCookie });
 expectStatus(departmentDelete, 200, 'admin can deactivate a payroll department option');
@@ -302,10 +408,14 @@ await expect(`/api/salary-records/${salaryId}`, 409, 'employee cannot edit a sub
 const promote = await request(`/api/admin/users/${secondUser.id}`, {
   method: 'PATCH',
   cookie: adminCookie,
-  body: { role: 'reviewer', status: 'active' },
+  body: { role: 'reviewer', status: 'active', workManager: true },
 });
 expectStatus(promote, 200, 'admin can grant reviewer role');
 assert(promote.data.user.role === 'reviewer', 'reviewer role is persisted');
+assert(promote.data.user.workManager === true, 'admin can independently grant work-manager permission');
+const refreshedOptions = await request('/api/payroll-options', { cookie: employeeCookie });
+expectStatus(refreshedOptions, 200, 'payroll options refresh after permission changes');
+assert(refreshedOptions.data.workManagers.some((item) => item.id === secondUser.id), 'newly enabled work manager appears in payroll options');
 
 const queue = await request('/api/review/salary-records', { cookie: secondCookie });
 expectStatus(queue, 200, 'reviewer can open review queue without relogin');
@@ -339,6 +449,14 @@ expectStatus(processedMonthQueue, 200, 'review queue remains readable after mont
 assert(processedMonthQueue.data.items.some((item) => item.record.id === salaryId && item.record.status === 3), 'approved record remains in the monthly review data');
 assert(processedMonthQueue.data.items.some((item) => item.record.id === cnySalaryId && item.record.status === 4), 'rejected record remains in the monthly review data');
 
+const transferSheet = await request(`/api/staff/transfer-sheet?month=${workDate.slice(0, 7)}`, { cookie: secondCookie });
+expectStatus(transferSheet, 200, 'reviewer can load the monthly transfer sheet');
+const transferRow = transferSheet.data.rows.find((row) => row.user.id === employee.id);
+assert(transferRow?.approvedAmounts.JPY === 5000, 'transfer sheet includes selected-month approved salary');
+assert(transferRow?.profile.tel.includes('WeChat'), 'transfer sheet includes multiline employee contact information');
+assert(transferRow?.pdfFiles.some((file) => file.key === bankFileKey), 'transfer sheet includes downloadable bank-card PDF');
+assert(transferRow?.pdfFiles.some((file) => file.key === fileKey), 'transfer sheet includes every uploaded salary PDF');
+
 const auditMonth = workDate.slice(0, 7);
 const overview = await request(`/api/audit/overview?year=${workDate.slice(0, 4)}&month=${auditMonth}&userId=${employee.id}`, { cookie: secondCookie });
 expectStatus(overview, 200, 'reviewer can open monthly and annual total audit');
@@ -359,12 +477,26 @@ const employeeAccount = await request('/api/users', { cookie: employeeCookie });
 expectStatus(employeeAccount, 200, 'employee can refresh own account');
 assert(employeeAccount.data.account.salaryRecords.some((record) => record.id === salaryId && record.status === 3), 'employee sees reviewed result');
 
+await expect(`/api/admin/users/${adminAccount.id}`, 200, 'admin can remove own work-manager permission', {
+  method: 'PATCH', cookie: adminCookie, body: { workManager: false },
+});
+const managerOptionsAfterRemoval = await request('/api/payroll-options', { cookie: employeeCookie });
+expectStatus(managerOptionsAfterRemoval, 200, 'work-manager options refresh after permission removal');
+assert(!managerOptionsAfterRemoval.data.workManagers.some((item) => item.id === adminAccount.id), 'removed work manager no longer appears in payroll options');
+assert(managerOptionsAfterRemoval.data.workManagers.some((item) => item.id === secondUser.id), 'other enabled work managers remain available');
+
 await expect(`/api/admin/users/${secondUser.id}`, 200, 'admin can disable an account', {
   method: 'PATCH', cookie: adminCookie, body: { status: 'disabled' },
 });
+const noActiveManagers = await request('/api/payroll-options', { cookie: employeeCookie });
+expectStatus(noActiveManagers, 200, 'payroll options remain readable when no work manager is active');
+assert(noActiveManagers.data.workManagers.length === 0, 'removing every active work manager does not silently restore one');
 await expect('/api/users', 401, 'disabled account loses active session immediately', { cookie: secondCookie });
 await expect(`/api/admin/users/${secondUser.id}`, 200, 'admin can reactivate an account', {
   method: 'PATCH', cookie: adminCookie, body: { status: 'active' },
+});
+await expect(`/api/admin/users/${adminAccount.id}`, 200, 'admin can restore own work-manager permission', {
+  method: 'PATCH', cookie: adminCookie, body: { workManager: true },
 });
 await expect(`/api/admin/users/${employee.id}`, 200, 'admin can revoke an employee session', {
   method: 'PATCH', cookie: adminCookie, body: { revokeSessions: true },
@@ -390,6 +522,7 @@ await expect('/api/admin/settings', 200, 'admin can reopen registration after te
 const audit = await request('/api/admin/audit-logs?limit=200', { cookie: adminCookie });
 expectStatus(audit, 200, 'admin can read audit log');
 assert(audit.data.logs.some((log) => log.action === 'salary.approve' && log.targetId === salaryId), 'salary approval is audited');
+assert(audit.data.logs.some((log) => log.action === 'salary.approve' && log.targetId === salaryId && log.actorDisplayName === '审计审核员'), 'audit entries prefer the registered name over email');
 assert(audit.data.logs.some((log) => log.action === 'salary.reject' && log.targetId === cnySalaryId), 'salary rejection is audited');
 assert(audit.data.logs.some((log) => log.action === 'department.delete' && log.targetId === customDepartment.key), 'department deactivation is audited');
 assert(audit.data.logs.some((log) => log.action === 'account.permission_update' && log.targetId === secondUser.id), 'permission change is audited');

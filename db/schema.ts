@@ -13,6 +13,7 @@ export const payrollUsers = sqliteTable('payroll_users', {
   lastLoginAt: text('last_login_at'),
   failedLoginCount: integer('failed_login_count').notNull().default(0),
   lockedUntil: integer('locked_until'),
+  workManager: integer('work_manager', { mode: 'boolean' }).notNull().default(false),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 }, (table) => [

@@ -72,7 +72,7 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
     return () => { cancelled = true; };
   }, []);
 
-  const updateDraft = (id: string, field: 'role' | 'status', value: AccountRole | AccountStatus) => {
+  const updateDraft = (id: string, field: 'role' | 'status' | 'workManager', value: AccountRole | AccountStatus | boolean) => {
     setUsers((current) => current.map((user) => user.id === id ? { ...user, [field]: value } : user));
   };
 
@@ -81,7 +81,7 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
     try {
       const result = await apiRequest<{ user: ManagedUser }>(`/api/admin/users/${user.id}`, {
         method: 'PATCH',
-        body: { role: user.role, status: user.status },
+        body: { role: user.role, status: user.status, workManager: user.workManager },
       });
       setUsers((current) => current.map((candidate) => candidate.id === user.id ? result.user : candidate));
       setTone('success');
@@ -168,9 +168,8 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
     <section className="content-card admin-workspace">
       <div className="content-card__heading">
         <div>
-          <p className="eyebrow">系统后台</p>
+          <p className="eyebrow">05 账号权限</p>
           <h1>账号与权限</h1>
-          <p>角色与账号状态由服务端实时校验；停用账号会立即撤销全部会话。</p>
         </div>
         <button type="button" className="secondary-button" disabled={loading} onClick={() => void load()}>刷新</button>
       </div>
@@ -178,7 +177,7 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
       <div className="admin-setting-card">
         <div>
           <strong>新账号注册</strong>
-          <span>{registrationOpen ? '当前开放；任何持有网址的人都可注册员工账号。' : '当前关闭；已有账号仍可登录。'}</span>
+          <span>{registrationOpen ? '已开放' : '已关闭'}</span>
         </div>
         <button type="button" className={registrationOpen ? 'secondary-button danger-button' : 'primary-button'} onClick={() => void toggleRegistration()}>
           {registrationOpen ? '关闭注册' : '开放注册'}
@@ -189,8 +188,7 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
 
       <div className="department-admin-card">
         <div className="section-heading-inline">
-          <div><p className="eyebrow">动态选项</p><h2>工作所属部门</h2></div>
-          <span>停用不会改写历史申报</span>
+          <div><h2>工作所属部门</h2></div>
         </div>
         <form className="department-add-form" onSubmit={addDepartment}>
           <input value={departmentLabel} onChange={(event) => setDepartmentLabel(event.target.value)} placeholder="新部门选项名称" maxLength={80} required />
@@ -209,7 +207,7 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
       ) : (
         <div className="data-table-wrap admin-users-table">
           <table className="data-table">
-            <thead><tr><th>账号</th><th>角色</th><th>状态</th><th>最近登录</th><th>操作</th></tr></thead>
+            <thead><tr><th>账号</th><th>角色</th><th>状态</th><th>工作负责人</th><th>最近登录</th><th>操作</th></tr></thead>
             <tbody>
               {users.map((user) => (
                 <tr key={user.id}>
@@ -222,6 +220,12 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
                   <td>
                     <select value={user.status} disabled={user.id === currentUserId} onChange={(event) => updateDraft(user.id, 'status', event.target.value as AccountStatus)}>
                       {(Object.keys(ACCOUNT_STATUS_LABELS) as AccountStatus[]).map((status) => <option value={status} key={status}>{ACCOUNT_STATUS_LABELS[status]}</option>)}
+                    </select>
+                  </td>
+                  <td>
+                    <select value={user.workManager ? 'yes' : 'no'} onChange={(event) => updateDraft(user.id, 'workManager', event.target.value === 'yes')}>
+                      <option value="yes">可被选为负责人</option>
+                      <option value="no">不可被选择</option>
                     </select>
                   </td>
                   <td>{user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString('zh-CN') : '尚未登录'}</td>
@@ -284,7 +288,7 @@ function PasswordResetDialog({ user, onClose, onSuccess }: { user: ManagedUser; 
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="small-modal" role="dialog" aria-modal="true" aria-labelledby="admin-password-title">
-        <header><div><p className="eyebrow">管理员操作</p><h2 id="admin-password-title">重置 {user.displayName} 的密码</h2></div><button className="icon-button" type="button" onClick={onClose}>×</button></header>
+        <header><div><h2 id="admin-password-title">重置 {user.displayName} 的密码</h2></div><button className="icon-button" type="button" onClick={onClose}>×</button></header>
         <form onSubmit={submit}>
           <label><span>新临时密码</span><input type="password" minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
           <label><span>确认临时密码</span><input type="password" minLength={8} value={confirm} onChange={(event) => setConfirm(event.target.value)} required /></label>

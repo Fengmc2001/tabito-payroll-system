@@ -59,6 +59,7 @@ export type SalaryRecord = {
   id: string;
   userId: string;
   workDate: string;
+  checkUserId: string;
   checkUser: string;
   departmentKey: string;
   departmentLabel: string;
@@ -73,6 +74,7 @@ export type SalaryRecord = {
   travelStart: string;
   travelEnd: string;
   travelFee: number;
+  totalHours: number;
   workHours: number;
   restHours: number;
   finalSalary: number;
@@ -102,6 +104,7 @@ export type ManagedUser = {
   displayName: string;
   role: AccountRole;
   status: AccountStatus;
+  workManager: boolean;
   createdAt: string;
   updatedAt: string;
   lastLoginAt: string | null;
@@ -120,6 +123,7 @@ export type AuditLogItem = {
   id: string;
   actorUserId: string | null;
   actorEmail: string | null;
+  actorDisplayName: string | null;
   action: string;
   targetType: string;
   targetId: string;
@@ -134,6 +138,12 @@ export type DepartmentOption = {
   sortOrder: number;
   createdAt: string;
   updatedAt: string;
+};
+
+export type WorkManagerOption = {
+  id: string;
+  label: string;
+  email: string;
 };
 
 export type StoredFileInfo = {
@@ -167,6 +177,13 @@ export type EmployeeDetail = {
   salaryRecords: SalaryRecord[];
   monthlySummaries: MonthlyPayrollSummary[];
   auditLogs: AuditLogItem[];
+};
+
+export type TransferSheetRow = {
+  user: ManagedUser;
+  profile: Profile;
+  approvedAmounts: CurrencyAmounts;
+  pdfFiles: StoredFileInfo[];
 };
 
 export type AuditOverview = {
@@ -255,8 +272,6 @@ export const DEFAULT_DEPARTMENTS = [
   { key: 'dept-special', label: '特殊（具体备注）' },
 ] as const;
 
-export const CHECK_USERS = ['籍诚'];
-
 export const CURRENCIES: Array<{ value: CurrencyCode; label: string; symbol: string }> = [
   { value: 'JPY', label: '日元', symbol: 'JP¥' },
   { value: 'CNY', label: '人民币', symbol: 'CN¥' },
@@ -321,6 +336,7 @@ export function createRecord(userId: string): SalaryRecord {
   return {
     id: makeId('salary'),
     userId,
+    checkUserId: '',
     workDate: today(),
     checkUser: '',
     departmentKey: '',
@@ -336,6 +352,7 @@ export function createRecord(userId: string): SalaryRecord {
     travelStart: '',
     travelEnd: '',
     travelFee: 0,
+    totalHours: 0,
     workHours: 0,
     restHours: 0,
     finalSalary: 0,
@@ -349,13 +366,15 @@ export function createRecord(userId: string): SalaryRecord {
 }
 
 export function recalculateRecord(record: SalaryRecord): SalaryRecord {
-  const workHours = getWorkHours(record.startTime, record.endTime);
-  const restHours = getRestHours(record.applyType, workHours);
+  const totalHours = getWorkHours(record.startTime, record.endTime);
+  const requestedRest = numberOrZero(record.restHours);
+  const restHours = Number(Math.max(0, Math.min(24, requestedRest)).toFixed(2));
+  const workHours = Number(Math.max(0, totalHours - restHours).toFixed(2));
   let finalSalary = 0;
 
   switch (record.applyType) {
     case 1:
-      finalSalary = Math.floor((workHours - restHours) * numberOrZero(record.rate) + numberOrZero(record.travelFee));
+      finalSalary = Math.floor(workHours * numberOrZero(record.rate) + numberOrZero(record.travelFee));
       break;
     case 2:
     case 3:
@@ -375,6 +394,7 @@ export function recalculateRecord(record: SalaryRecord): SalaryRecord {
 
   return {
     ...record,
+    totalHours,
     workHours,
     restHours,
     finalSalary: Number.isFinite(finalSalary) ? Math.floor(finalSalary) : 0,
@@ -386,19 +406,6 @@ export function getWorkHours(startTime: string, endTime: string) {
   const end = toMinutes(endTime);
   if (start === null || end === null || end <= start) return 0;
   return Number(((end - start) / 60).toFixed(2));
-}
-
-export function getRestHours(type: SalaryApplyType, workHours: number) {
-  if (type === 1) {
-    if (workHours >= 12) return 2;
-    if (workHours >= 6) return 1;
-  }
-  if (type === 7) {
-    if (workHours >= 12) return 2;
-    if (workHours >= 8) return 1;
-    if (workHours >= 6) return 0.75;
-  }
-  return 0;
 }
 
 export function formatMoney(value: number | null | undefined, currency: CurrencyCode = 'JPY') {
@@ -439,18 +446,41 @@ export function profileBasicsAreReady(profile: Profile) {
   );
 }
 
+export function birthdayIsValid(value: string) {
+  if (!/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+export function profileMissingRequirements(profile: Profile) {
+  const missing: string[] = [];
+  if (!profile.lastNameCn.trim()) missing.push('中文姓');
+  if (!profile.firstNameCn.trim()) missing.push('中文名');
+  if (!profile.address.trim()) missing.push('现住址');
+  if (!profile.tel.trim()) missing.push('联系方式');
+  if (!birthdayIsValid(profile.birthday)) missing.push('生日');
+  if (!profile.idType) missing.push('身份证件类型');
+  if (profile.idType === 'residence' && !profile.residentStatus.trim()) missing.push('在留资格');
+  if (profile.idType === 'china-id') {
+    if (!profile.nationality.trim()) missing.push('国籍');
+    if (!profile.idNumber.trim()) missing.push('证件号');
+    if (!profile.idExpiryDate.trim()) missing.push('证件有效期限');
+    if (!profile.addressOfLicense.trim()) missing.push('证件上住址所在地');
+  }
+  if (!profile.bankType) missing.push('工资收款方式');
+  if (profile.bankFileNames.length < 1 || profile.bankFileNames.length > 2) missing.push('银行卡正反面');
+  if (!profile.bankName.trim()) missing.push(profile.bankType === 'alipay' ? '支付宝账户' : '银行名称');
+  if (!profile.bankAccountNumber.trim()) missing.push('收款账号');
+  if (!profile.bankAccountHolder.trim()) missing.push('账户名');
+  if ((profile.bankType === 'cn-bank' || profile.bankType === 'alipay') && !profile.payeeIsSelf) {
+    missing.push('收款人是否本人');
+  }
+  if (profile.payeeIsSelf === '否' && !profile.payeeName.trim()) missing.push('收款人姓名');
+  return [...new Set(missing)];
+}
+
 export function profileIsReady(profile: Profile) {
-  if (!profileBasicsAreReady(profile) || !profile.birthday || !profile.idType || !profile.bankType) return false;
-  const expectedIdFiles = profile.idType === 'passport' ? 1 : 2;
-  if (profile.idFileNames.length !== expectedIdFiles || !profile.dependents) return false;
-  if (profile.idType === 'residence' && (!profile.residentStatus || !profile.activityPermission)) return false;
-  if (profile.idType === 'china-id' && (
-    !profile.nationality || !profile.idNumber || !profile.idExpiryDate || !profile.addressOfLicense
-  )) return false;
-  if (!profile.bankName || !profile.bankAccountNumber || !profile.bankAccountHolder) return false;
-  if ((profile.bankType === 'cn-bank' || profile.bankType === 'alipay') && !profile.payeeIsSelf) return false;
-  if (profile.payeeIsSelf === '否' && !profile.payeeName) return false;
-  return true;
+  return profileMissingRequirements(profile).length === 0;
 }
 
 export function nextPaymentDate(workDate: string) {
