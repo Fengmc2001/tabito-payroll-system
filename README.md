@@ -12,7 +12,7 @@
 - 状态提示：成功、警示和说明会同时显示为页面内嵌提醒与右上角弹窗，字段范围、文件数量和业务校验错误也使用同一套双重提示。
 - 双币种：申报时从下拉框选择日元或人民币；`JPY` 使用蓝色文字，`CNY` 使用暖红色文字。所有月度/年度统计按币种分开，不直接相加。
 - 工作负责人是独立账号权限。管理员可在“账号与权限”中授予或取消，工资申报只显示当前启用的负责人；历史记录保留申报时的姓名快照。
-- 工时申报由员工自行填写休息小时和分钟，系统从总时长中扣除；不再按连续工作时长自动扣除休息时间。
+- 工时申报由员工自行填写休息小时和分钟，系统按分钟精确计算并从总时长中扣除；不再按连续工作时长自动扣除休息时间。
 - 默认部门为事务部、教学部、美术部、正社员、特殊（具体备注）。
 - 动态部门：管理员可新增/删除选项。删除为软停用，历史申报保留提交时的部门名称快照。
 - 按月审批：待审、通过、驳回同时保留在工作月份内，审批后不会从当月列表消失。
@@ -53,6 +53,7 @@ npm run demo:seed
 ```bash
 npm run lint
 npx tsc --noEmit
+npm run self-check:logic
 npm run build
 npm audit --omit=dev
 ```
@@ -68,7 +69,7 @@ PAYROLL_TEST_ADMIN_PASSWORD='set-a-test-password' \
 npm run self-check:backend
 ```
 
-最新自检通过 252 个断言。详细权限矩阵与边界见 [`docs/backend-self-check.md`](docs/backend-self-check.md)。
+最新纯逻辑自检通过 15 个断言，后端账号/权限/业务自检通过 275 个断言。详细权限矩阵见 [`docs/backend-self-check.md`](docs/backend-self-check.md)，浏览器与鲁棒性检查见 [`docs/robustness-test-report.md`](docs/robustness-test-report.md)。
 
 ## 部署
 
@@ -95,7 +96,7 @@ GitHub Pages 只能托管静态文件，无法运行本项目的登录 API、`Ht
 - `app/api/`：账号、工资、附件、审批、部门、员工和审计 API。
 - `app/lib/server/payroll-store.ts`：D1/R2 持久化、权限、状态机、快照和审计的服务端权威实现。
 - `db/schema.ts` 与 `drizzle/`：可检查的 SQLite/D1 schema 与迁移。
-- `scripts/`：两账号演示数据和后端权限自检。
+- `scripts/`：两账号演示数据、金额/日期逻辑自检和后端权限自检。
 - `.github/workflows/ci.yml`：每次 push/PR 自动执行 lint、TypeScript 和生产构建。
 
 ## 与参考站的关系

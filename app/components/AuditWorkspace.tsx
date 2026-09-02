@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CircleDollarSign } from 'lucide-react';
 import { ApiClientError, apiRequest } from '../lib/api-client';
 import { AuditOverview, CurrencyAmounts, currentMonth as getCurrentMonth } from '../lib/payroll';
@@ -15,6 +15,13 @@ export function AuditWorkspace() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
   const activeMonthlySummaries = overview?.monthlySummaries.filter((summary) => summary.recordCount > 0) ?? [];
+  const duplicateEmployeeNames = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const employee of overview?.employees ?? []) {
+      counts.set(employee.displayName, (counts.get(employee.displayName) ?? 0) + 1);
+    }
+    return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
+  }, [overview?.employees]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -50,7 +57,7 @@ export function AuditWorkspace() {
       </div>
       <div className="audit-filters">
         <label><span>月份</span><input type="month" value={month} onChange={(event) => setMonth(event.target.value || currentMonth)} /></label>
-        <label><span>员工</span><select value={userId} onChange={(event) => setUserId(event.target.value)}><option value="">全部员工</option>{overview?.employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName}</option>)}</select></label>
+        <label><span>员工</span><select value={userId} onChange={(event) => setUserId(event.target.value)}><option value="">全部员工</option>{overview?.employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName}{duplicateEmployeeNames.has(employee.displayName) ? `（${employee.email}）` : ''}</option>)}</select></label>
       </div>
       <StatusMessage message={message} tone="error" />
       {loading && !overview ? <div className="empty-state">正在加载…</div> : overview && <>

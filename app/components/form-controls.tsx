@@ -1,6 +1,6 @@
 'use client';
 
-import { ChangeEvent, ReactNode, useEffect, useId, useState } from 'react';
+import { ChangeEvent, FormEvent, ReactNode, useEffect, useId, useState } from 'react';
 
 export function Field({
   label,
@@ -43,6 +43,28 @@ export function FormSection({
       {children}
     </section>
   );
+}
+
+export function invalidFormControlMessage(event: FormEvent<HTMLFormElement>) {
+  event.preventDefault();
+  const control = event.target as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+  const label = control.closest('label')?.querySelector('.form-field__label, span')?.textContent?.replace('*', '').trim()
+    || control.getAttribute('aria-label')?.replace('必填', '').trim()
+    || '该字段';
+  const detail = control.validity.rangeOverflow
+    ? `不能超过 ${control.getAttribute('max')}。`
+    : control.validity.rangeUnderflow
+      ? `不能低于 ${control.getAttribute('min')}。`
+      : control.validity.tooLong
+        ? `不能超过 ${control.getAttribute('maxlength')} 个字符。`
+        : control.validity.tooShort
+          ? `至少需要 ${control.getAttribute('minlength')} 个字符。`
+          : control.validity.typeMismatch
+            ? '格式不正确。'
+            : control.validity.valueMissing
+              ? '为必填项。'
+              : '填写内容不符合要求。';
+  return `${label}${detail}`;
 }
 
 export function FileNameInput({

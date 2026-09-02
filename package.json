@@ -15,7 +15,8 @@
     "db:migrate:remote": "wrangler d1 migrations apply tabito-payroll-db --remote --config wrangler.jsonc",
     "deploy:cloudflare": "npm run build && wrangler deploy --config dist/server/wrangler.json",
     "demo:seed": "node scripts/create-local-demo.mjs",
-    "self-check:backend": "node scripts/backend-self-check.mjs"
+    "self-check:backend": "node scripts/backend-self-check.mjs",
+    "self-check:logic": "node scripts/payroll-logic-self-check.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",

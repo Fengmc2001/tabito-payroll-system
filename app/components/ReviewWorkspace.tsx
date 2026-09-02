@@ -79,6 +79,12 @@ export function ReviewWorkspace() {
     approved: summarize(monthItems, 3),
     rejected: summarize(monthItems, 4),
   }), [monthItems]);
+  const duplicateEmployeeNames = useMemo(() => {
+    const users = new Map(items.map((item) => [item.user.id, item.user]));
+    const counts = new Map<string, number>();
+    for (const user of users.values()) counts.set(user.displayName, (counts.get(user.displayName) ?? 0) + 1);
+    return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
+  }, [items]);
 
   const review = async (item: ReviewSalaryItem, decision: 'approve' | 'reject') => {
     const auditMemo = notes[item.record.id]?.trim() ?? '';
@@ -153,7 +159,7 @@ export function ReviewWorkspace() {
             return (
               <article className="review-card" key={record.id}>
                 <header>
-                  <div><strong>{item.user.displayName}</strong></div>
+                  <div><strong>{item.user.displayName}</strong>{duplicateEmployeeNames.has(item.user.displayName) && <small>{item.user.email}</small>}</div>
                   <span className={`status-badge status-badge--${status.tone}`}>{status.label}</span>
                 </header>
                 <dl>
@@ -172,7 +178,7 @@ export function ReviewWorkspace() {
                   <a key={key} href={`/api/files?key=${encodeURIComponent(key)}`} target="_blank" rel="noreferrer">附件 {index + 1}</a>
                 ))}</div>}
                 {pending ? <div className="review-actions">
-                  <label><span>审核备注（驳回时必填）</span><textarea value={notes[record.id] ?? ''} onChange={(event) => setNotes((current) => ({ ...current, [record.id]: event.target.value }))} rows={2} /></label>
+                  <label><span>审核备注（驳回时必填）</span><textarea maxLength={1000} value={notes[record.id] ?? ''} onChange={(event) => setNotes((current) => ({ ...current, [record.id]: event.target.value }))} rows={2} /></label>
                   <div><button type="button" className="secondary-button danger-button" disabled={busyId === record.id} onClick={() => void review(item, 'reject')}>驳回</button><button type="button" className="primary-button" disabled={busyId === record.id} onClick={() => void review(item, 'approve')}>{busyId === record.id ? '处理中…' : '审核通过'}</button></div>
                 </div> : record.auditMemo ? <p className="audit-memo"><b>审核备注：</b>{record.auditMemo}</p> : null}
               </article>

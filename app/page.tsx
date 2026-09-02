@@ -21,7 +21,7 @@ import { EmployeeWorkspace } from './components/EmployeeWorkspace';
 import { ProfileEditor } from './components/ProfileEditor';
 import { ReviewWorkspace } from './components/ReviewWorkspace';
 import { SalaryHistory, SalaryWorkspace } from './components/SalaryWorkspace';
-import { Field, StatusMessage } from './components/form-controls';
+import { Field, StatusMessage, invalidFormControlMessage } from './components/form-controls';
 import { ApiClientError, apiRequest } from './lib/api-client';
 import {
   APP_TITLE,
@@ -390,10 +390,17 @@ function AuthPage({
             : '注册后请先填写基本资料。')}
           {mode === 'forget' && '请联系管理员重置密码。'}
         </p>}
-        <form className="auth-form" onSubmit={submit}>
-          <Field label={bootstrapRequired ? '首个管理员账号' : '邮箱'} required><input type="email" value={email} readOnly={bootstrapRequired} onChange={(event) => setEmail(event.target.value)} placeholder="name@example.com" required /></Field>
-          {mode !== 'forget' && <Field label="密码" required><input type="password" minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} required /></Field>}
-          {mode === 'register' && <Field label="确认密码" required><input type="password" minLength={8} value={confirm} onChange={(event) => setConfirm(event.target.value)} required /></Field>}
+        <form
+          className="auth-form"
+          onSubmit={submit}
+          onInvalidCapture={(event) => {
+            setTone('error');
+            setMessage(invalidFormControlMessage(event));
+          }}
+        >
+          <Field label={bootstrapRequired ? '首个管理员账号' : '邮箱'} required><input type="email" maxLength={254} value={email} readOnly={bootstrapRequired} onChange={(event) => setEmail(event.target.value)} placeholder="name@example.com" required /></Field>
+          {mode !== 'forget' && <Field label="密码" required><input type="password" minLength={8} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} required /></Field>}
+          {mode === 'register' && <Field label="确认密码" required><input type="password" minLength={8} maxLength={128} value={confirm} onChange={(event) => setConfirm(event.target.value)} required /></Field>}
           <StatusMessage message={message} tone={tone} />
           <button className="primary-button primary-button--large" type="submit" disabled={busy}>
             {busy ? '处理中…' : mode === 'login' ? '登陆' : mode === 'register' ? '注册' : '查看恢复方式'}

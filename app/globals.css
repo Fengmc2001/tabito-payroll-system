@@ -672,7 +672,17 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
 
 .review-card > header > div { display: grid; gap: 3px; }
 .review-card > header strong { color: var(--xly-navy-deep); font-size: 15px; }
+.review-card > header small { color: var(--xly-muted); font-size: 11px; }
 .review-card > header span:not(.status-badge) { color: var(--xly-muted); font-size: 11px; }
+
+.salary-audit-note {
+  display: block;
+  max-width: 220px;
+  margin-top: 5px;
+  color: var(--xly-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
 
 .review-card dl {
   display: grid;

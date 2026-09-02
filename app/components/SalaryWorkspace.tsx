@@ -1,13 +1,14 @@
 'use client';
 
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from 'react';
-import { FileNameInput, Field, FormSection, StatusMessage } from './form-controls';
+import { FileNameInput, Field, FormSection, StatusMessage, invalidFormControlMessage } from './form-controls';
 import { apiRequest } from '../lib/api-client';
 import {
   APPLY_TYPES,
   CURRENCIES,
   CurrencyAmounts,
   DepartmentOption,
+  SALARY_TEXT_MAX_LENGTH,
   SalaryRecord,
   STATUS,
   WorkManagerOption,
@@ -322,7 +323,10 @@ function SalaryTable({
                 <td>{getDepartmentLabel(record.departmentKey, record.departmentLabel)}</td>
                 <td>{getApplyTypeLabel(record.applyType)}</td>
                 <td><Money amount={record.finalSalary} currency={record.currency} /></td>
-                <td><span className={`status-badge status-badge--${status.tone}`}>{status.label}</span></td>
+                <td>
+                  <span className={`status-badge status-badge--${status.tone}`}>{status.label}</span>
+                  {record.auditMemo && <small className="salary-audit-note">{record.auditMemo}</small>}
+                </td>
                 <td>
                   <div className="row-actions">
                     {record.status === 1 && <button type="button" onClick={() => onEdit(record)}>编辑</button>}
@@ -441,19 +445,7 @@ function SalaryRecordDialog({
   };
 
   const reportInvalid = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const control = event.target as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
-    const label = control.closest('label')?.querySelector('.form-field__label')?.textContent?.replace('*', '').trim() || '该字段';
-    const message = control.validity.rangeOverflow
-      ? `不能超过 ${control.getAttribute('max')}。`
-      : control.validity.rangeUnderflow
-        ? `不能低于 ${control.getAttribute('min')}。`
-        : control.validity.tooLong
-          ? `不能超过 ${control.getAttribute('maxlength')} 个字符。`
-          : control.validity.valueMissing
-            ? '为必填项。'
-            : '填写内容不符合要求。';
-    setError(`${label}${message}`);
+    setError(invalidFormControlMessage(event));
   };
 
   return (
@@ -476,7 +468,10 @@ function SalaryRecordDialog({
                 <Field label="工作负责人" required>
                   <select value={draft.checkUserId} onChange={(event) => update('checkUserId', event.target.value)} required>
                     <option value="">请选择</option>
-                    {workManagers.map((manager) => <option key={manager.id} value={manager.id}>{manager.label}</option>)}
+                    {workManagers.map((manager) => {
+                      const duplicatedName = workManagers.some((item) => item.id !== manager.id && item.label === manager.label);
+                      return <option key={manager.id} value={manager.id}>{manager.label}{duplicatedName ? `（${manager.email}）` : ''}</option>;
+                    })}
                   </select>
                 </Field>
                 <Field label="工作所属部门" required>
@@ -496,10 +491,10 @@ function SalaryRecordDialog({
                   </select>
                 </Field>
                 <Field label="工作内容" required={draft.applyType === 7}>
-                  <textarea rows={3} maxLength={2000} value={draft.workContent} onChange={(event) => update('workContent', event.target.value)} />
+                  <textarea rows={3} maxLength={SALARY_TEXT_MAX_LENGTH} value={draft.workContent} onChange={(event) => update('workContent', event.target.value)} />
                 </Field>
                 <Field label="备注">
-                  <textarea rows={3} maxLength={2000} value={draft.memo} onChange={(event) => update('memo', event.target.value)} />
+                  <textarea rows={3} maxLength={SALARY_TEXT_MAX_LENGTH} value={draft.memo} onChange={(event) => update('memo', event.target.value)} />
                 </Field>
               </div>
             </FormSection>

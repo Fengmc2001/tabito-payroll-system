@@ -216,6 +216,8 @@ export const ACCOUNT_STATUS_LABELS: Record<AccountStatus, string> = {
 
 export const APP_TITLE = '旅人教育入职系统';
 export const BOOTSTRAP_ADMIN_EMAIL = 'TabitoAdimin01@tabitoedu.com';
+export const PROFILE_TEXT_MAX_LENGTH = 500;
+export const SALARY_TEXT_MAX_LENGTH = 2000;
 
 export const APPLY_TYPES: Array<{
   value: SalaryApplyType;
@@ -366,15 +368,18 @@ export function createRecord(userId: string): SalaryRecord {
 }
 
 export function recalculateRecord(record: SalaryRecord): SalaryRecord {
-  const totalHours = getWorkHours(record.startTime, record.endTime);
+  const totalMinutes = getWorkMinutes(record.startTime, record.endTime);
+  const totalHours = Number((totalMinutes / 60).toFixed(2));
   const requestedRest = numberOrZero(record.restHours);
-  const restHours = Number(Math.max(0, Math.min(24, requestedRest)).toFixed(2));
-  const workHours = Number(Math.max(0, totalHours - restHours).toFixed(2));
+  const restMinutes = Math.round(Math.max(0, Math.min(24, requestedRest)) * 60);
+  const paidMinutes = Math.max(0, totalMinutes - restMinutes);
+  const restHours = Number((restMinutes / 60).toFixed(2));
+  const workHours = Number((paidMinutes / 60).toFixed(2));
   let finalSalary = 0;
 
   switch (record.applyType) {
     case 1:
-      finalSalary = Math.floor(workHours * numberOrZero(record.rate) + numberOrZero(record.travelFee));
+      finalSalary = Math.floor((paidMinutes / 60) * numberOrZero(record.rate) + numberOrZero(record.travelFee));
       break;
     case 2:
     case 3:
@@ -402,10 +407,14 @@ export function recalculateRecord(record: SalaryRecord): SalaryRecord {
 }
 
 export function getWorkHours(startTime: string, endTime: string) {
+  return Number((getWorkMinutes(startTime, endTime) / 60).toFixed(2));
+}
+
+export function getWorkMinutes(startTime: string, endTime: string) {
   const start = toMinutes(startTime);
   const end = toMinutes(endTime);
   if (start === null || end === null || end <= start) return 0;
-  return Number(((end - start) / 60).toFixed(2));
+  return end - start;
 }
 
 export function formatMoney(value: number | null | undefined, currency: CurrencyCode = 'JPY') {
@@ -447,6 +456,10 @@ export function profileBasicsAreReady(profile: Profile) {
 }
 
 export function birthdayIsValid(value: string) {
+  return dateIsValid(value) && value >= '1000-01-01' && value <= today();
+}
+
+export function dateIsValid(value: string) {
   if (!/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(value)) return false;
   const parsed = new Date(`${value}T00:00:00Z`);
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
@@ -484,9 +497,9 @@ export function profileIsReady(profile: Profile) {
 }
 
 export function nextPaymentDate(workDate: string) {
-  const date = new Date(`${workDate || today()}T00:00:00`);
-  date.setMonth(date.getMonth() + 1);
-  date.setDate(10);
+  const safeDate = dateIsValid(workDate) ? workDate : today();
+  const [year, month] = safeDate.split('-').map(Number);
+  const date = new Date(year, month, 10);
   return date.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' });
 }
 

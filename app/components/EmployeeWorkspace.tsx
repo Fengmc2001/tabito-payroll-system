@@ -96,6 +96,7 @@ export function EmployeeWorkspace() {
   }, [month, selectedId]);
 
   const selectedSummary = employees.find((employee) => employee.id === selectedId);
+  const duplicateEmployeeNames = useMemo(() => duplicateNames(employees), [employees]);
   const monthRecords = useMemo(
     () => detail?.salaryRecords.filter((record) => record.workDate.startsWith(month)) ?? [],
     [detail, month],
@@ -139,7 +140,7 @@ export function EmployeeWorkspace() {
             setSelectedId(employee.id);
             if (selectedId === employee.id) void loadDetail(employee.id);
           }}>
-            <strong>{employee.displayName}</strong><small>{ROLE_LABELS[employee.role]} · {ACCOUNT_STATUS_LABELS[employee.status]} · {employee.recordCount} 条</small>
+            <strong>{employee.displayName}</strong><small>{duplicateEmployeeNames.has(employee.displayName) ? `${employee.email} · ` : ''}{ROLE_LABELS[employee.role]} · {ACCOUNT_STATUS_LABELS[employee.status]} · {employee.recordCount} 条</small>
           </button>)}
         </aside>
         <div className="employee-detail">
@@ -293,17 +294,22 @@ function downloadTransferSheet(rows: TransferSheetRow[], month: string) {
     row.profile.bankAccountHolder,
     row.profile.payeeName || row.user.displayName,
     row.profile.payeeIdNumber,
-    String(row.approvedAmounts.JPY),
-    String(row.approvedAmounts.CNY),
+    row.approvedAmounts.JPY,
+    row.approvedAmounts.CNY,
   ]);
-  const xmlRows = [headers, ...body].map((row) => `<Row>${row.map((cell) => `<Cell><Data ss:Type="String">${escapeXml(cell)}</Data></Cell>`).join('')}</Row>`).join('');
+  const xmlRows = [headers, ...body].map((row) => `<Row>${row.map((cell) => {
+    const type = typeof cell === 'number' ? 'Number' : 'String';
+    return `<Cell><Data ss:Type="${type}">${escapeXml(String(cell))}</Data></Cell>`;
+  }).join('')}</Row>`).join('');
   const workbook = `<?xml version="1.0" encoding="UTF-8"?><?mso-application progid="Excel.Sheet"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Worksheet ss:Name="${escapeXml(month)}"><Table>${xmlRows}</Table></Worksheet></Workbook>`;
   const url = URL.createObjectURL(new Blob([workbook], { type: 'application/vnd.ms-excel;charset=utf-8' }));
   const anchor = document.createElement('a');
   anchor.href = url;
   anchor.download = `旅人教育-工资汇总-${month}.xls`;
+  document.body.appendChild(anchor);
   anchor.click();
-  URL.revokeObjectURL(url);
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function escapeXml(value: string) {
@@ -312,6 +318,12 @@ function escapeXml(value: string) {
 
 function formatFileSize(size: number) {
   return size < 1024 * 1024 ? `${Math.max(1, Math.round(size / 1024))} KB` : `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function duplicateNames(users: Array<{ id: string; displayName: string }>) {
+  const counts = new Map<string, number>();
+  for (const user of users) counts.set(user.displayName, (counts.get(user.displayName) ?? 0) + 1);
+  return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
 }
 
 function errorText(error: unknown) {

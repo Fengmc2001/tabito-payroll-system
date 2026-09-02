@@ -107,6 +107,12 @@ const employeeBasicAccount = employeeOnboarding.data.account;
 await expect(`/api/users/${employee.id}`, 400, 'server rejects a birthday whose year is not exactly four digits', {
   method: 'PATCH', cookie: employeeCookie, body: { profile: { ...employeeBasicAccount.profile, birthday: '123456-01-01' } },
 });
+await expect(`/api/users/${employee.id}`, 400, 'server rejects a future birthday', {
+  method: 'PATCH', cookie: employeeCookie, body: { profile: { ...employeeBasicAccount.profile, birthday: '9999-01-01' } },
+});
+await expect(`/api/users/${employee.id}`, 400, 'server rejects overlong profile text instead of silently truncating it', {
+  method: 'PATCH', cookie: employeeCookie, body: { profile: { ...employeeBasicAccount.profile, address: 'x'.repeat(501) } },
+});
 
 await expect('/api/admin/users', 403, 'employee cannot list accounts', { cookie: employeeCookie });
 await expect('/api/review/salary-records', 403, 'employee cannot open review queue', { cookie: employeeCookie });
@@ -123,6 +129,9 @@ const departmentCreate = await request('/api/admin/departments', {
 });
 expectStatus(departmentCreate, 201, 'admin can add a payroll department option');
 const customDepartment = departmentCreate.data.department;
+await expect('/api/admin/departments', 400, 'server rejects an overlong department name instead of silently truncating it', {
+  method: 'POST', cookie: adminCookie, body: { label: 'x'.repeat(81) },
+});
 
 const secondRegistration = await request('/api/users', {
   method: 'POST',
@@ -310,6 +319,60 @@ assert(created.data.record.checkUserId === adminAccount.id && created.data.recor
 await expect('/api/salary-records', 400, 'an account without work-manager permission cannot be selected', {
   method: 'POST', cookie: employeeCookie, body: { ...forgedRecord, id: `salary-${randomUUID()}`, checkUserId: secondUser.id },
 });
+await expect('/api/salary-records', 400, 'server rejects an impossible work date', {
+  method: 'POST', cookie: employeeCookie, body: { ...forgedRecord, id: `salary-${randomUUID()}`, workDate: '2026-02-31' },
+});
+await expect('/api/salary-records', 400, 'server rejects a work date with a valid prefix and trailing text', {
+  method: 'POST', cookie: employeeCookie, body: { ...forgedRecord, id: `salary-${randomUUID()}`, workDate: `${workDate}x` },
+});
+await expect('/api/salary-records', 400, 'server rejects a time with a valid prefix and trailing text', {
+  method: 'POST', cookie: employeeCookie, body: { ...forgedRecord, id: `salary-${randomUUID()}`, departmentKey: 'dept-teaching', applyType: 1, startTime: '09:00x', endTime: '10:00' },
+});
+await expect('/api/salary-records', 400, 'server rejects overlong salary text instead of silently truncating it', {
+  method: 'POST', cookie: employeeCookie, body: { ...forgedRecord, id: `salary-${randomUUID()}`, workContent: 'x'.repeat(2001) },
+});
+
+const tenMinuteRecordId = `salary-${randomUUID()}`;
+const tenMinuteRecord = await request('/api/salary-records', {
+  method: 'POST', cookie: employeeCookie, body: {
+    ...forgedRecord,
+    id: tenMinuteRecordId,
+    departmentKey: 'dept-teaching',
+    applyType: 1,
+    rate: 1000,
+    startTime: '09:00',
+    endTime: '09:10',
+    restHours: 0,
+    travelFee: 0,
+    attachments: [],
+  },
+});
+expectStatus(tenMinuteRecord, 201, 'employee can create a ten-minute hourly draft');
+assert(tenMinuteRecord.data.record.finalSalary === 166, 'server calculates a ten-minute hourly salary with minute precision');
+
+const fiveMinuteBreakRecordId = `salary-${randomUUID()}`;
+const fiveMinuteBreakRecord = await request('/api/salary-records', {
+  method: 'POST', cookie: employeeCookie, body: {
+    ...forgedRecord,
+    id: fiveMinuteBreakRecordId,
+    departmentKey: 'dept-teaching',
+    applyType: 1,
+    rate: 1000,
+    startTime: '09:00',
+    endTime: '10:00',
+    restHours: 0.08,
+    travelFee: 0,
+    attachments: [],
+  },
+});
+expectStatus(fiveMinuteBreakRecord, 201, 'employee can create an hourly draft with a five-minute break');
+assert(fiveMinuteBreakRecord.data.record.finalSalary === 916, 'server deducts a five-minute break with minute precision');
+await expect(`/api/salary-records/${tenMinuteRecordId}`, 200, 'ten-minute calculation test draft can be deleted', {
+  method: 'DELETE', cookie: employeeCookie,
+});
+await expect(`/api/salary-records/${fiveMinuteBreakRecordId}`, 200, 'five-minute-break calculation test draft can be deleted', {
+  method: 'DELETE', cookie: employeeCookie,
+});
 
 const restRecordId = `salary-${randomUUID()}`;
 const restRecord = await request('/api/salary-records', {
@@ -433,6 +496,9 @@ assert(staffDetail.data.employee.salaryRecords.some((record) => record.id === sa
 const recentAudit = await request('/api/audit/recent', { cookie: secondCookie });
 expectStatus(recentAudit, 200, 'reviewer can read the latest ten audit events');
 assert(recentAudit.data.logs.length <= 10, 'recent audit endpoint never returns more than ten events');
+await expect(`/api/review/salary-records/${salaryId}`, 400, 'server rejects an overlong review memo instead of silently truncating it', {
+  method: 'PATCH', cookie: secondCookie, body: { decision: 'approve', auditMemo: 'x'.repeat(1001) },
+});
 
 const approval = await request(`/api/review/salary-records/${salaryId}`, {
   method: 'PATCH', cookie: secondCookie, body: { decision: 'approve', auditMemo: 'Self-check approved' },
@@ -488,9 +554,9 @@ assert(managerOptionsAfterRemoval.data.workManagers.some((item) => item.id === s
 await expect(`/api/admin/users/${secondUser.id}`, 200, 'admin can disable an account', {
   method: 'PATCH', cookie: adminCookie, body: { status: 'disabled' },
 });
-const noActiveManagers = await request('/api/payroll-options', { cookie: employeeCookie });
-expectStatus(noActiveManagers, 200, 'payroll options remain readable when no work manager is active');
-assert(noActiveManagers.data.workManagers.length === 0, 'removing every active work manager does not silently restore one');
+const managersAfterTestAccountsDisabled = await request('/api/payroll-options', { cookie: employeeCookie });
+expectStatus(managersAfterTestAccountsDisabled, 200, 'payroll options remain readable after tested work managers are disabled');
+assert(!managersAfterTestAccountsDisabled.data.workManagers.some((item) => item.id === adminAccount.id || item.id === secondUser.id), 'disabled tested work managers are not silently restored');
 await expect('/api/users', 401, 'disabled account loses active session immediately', { cookie: secondCookie });
 await expect(`/api/admin/users/${secondUser.id}`, 200, 'admin can reactivate an account', {
   method: 'PATCH', cookie: adminCookie, body: { status: 'active' },

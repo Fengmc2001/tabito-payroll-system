@@ -13,8 +13,10 @@ import {
   EmployeeSummary,
   ManagedUser,
   MonthlyPayrollSummary,
+  PROFILE_TEXT_MAX_LENGTH,
   Profile,
   ReviewSalaryItem,
+  SALARY_TEXT_MAX_LENGTH,
   SalaryRecord,
   SalaryStatus,
   StoredAccount,
@@ -24,8 +26,10 @@ import {
   birthdayIsValid,
   createEmptyProfile,
   currentMonth,
+  dateIsValid,
   emptyCurrencyAmounts,
   getDepartmentLabel,
+  getWorkMinutes,
   profileBasicsAreReady,
   profileMissingRequirements,
   recalculateRecord,
@@ -618,7 +622,7 @@ export async function reviewSalaryRecord(
 ) {
   requireRole(actor, ['reviewer', 'admin']);
   if (!['approve', 'reject'].includes(decision)) throw new ApiError(400, '审核动作无效。');
-  const memo = cleanString(auditMemo, 1000);
+  const memo = cleanStringStrict(auditMemo, 1000, '审核备注');
   if (decision === 'reject' && !memo) throw new ApiError(400, '驳回时必须填写审核备注。');
   const db = await database();
   const row = await db.prepare('SELECT id, user_id, status, currency, data_json FROM payroll_salary_records WHERE id = ?')
@@ -755,7 +759,7 @@ export async function listAdminDepartments(actor: SessionActor): Promise<Departm
 
 export async function createDepartment(actor: SessionActor, input: { label?: string }) {
   requireRole(actor, ['admin']);
-  const label = cleanString(input.label, 80);
+  const label = cleanStringStrict(input.label, 80, '部门名称');
   if (!label) throw new ApiError(400, '请填写部门选项名称。');
   const db = await database();
   const duplicate = await db.prepare('SELECT id FROM payroll_departments WHERE label = ? AND active = 1')
@@ -1076,7 +1080,10 @@ function sanitizeProfile(input: Profile) {
   const source = input as unknown as Record<string, unknown>;
   for (const key of Object.keys(profile)) {
     if (key === 'idFileNames' || key === 'bankFileNames') continue;
-    mutable[key] = cleanString(source[key], 500);
+    if (typeof source[key] === 'string' && source[key].length > PROFILE_TEXT_MAX_LENGTH) {
+      throw new ApiError(400, `个人资料中的文本每项不能超过 ${PROFILE_TEXT_MAX_LENGTH} 个字符。`);
+    }
+    mutable[key] = cleanString(source[key], PROFILE_TEXT_MAX_LENGTH);
   }
   profile.gender = ['', '男', '女', '其他'].includes(profile.gender) ? profile.gender : '';
   profile.idType = ['', 'residence', 'china-id', 'passport'].includes(profile.idType) ? profile.idType : '';
@@ -1090,7 +1097,10 @@ function sanitizeProfile(input: Profile) {
   profile.idFileNames = cleanFileKeys(source.idFileNames, 2);
   profile.bankFileNames = cleanFileKeys(source.bankFileNames, 2);
   if (profile.birthday && !birthdayIsValid(profile.birthday)) {
-    throw new ApiError(400, '生日必须使用四位年份的有效日期，例如 1992-01-01。');
+    throw new ApiError(400, '生日必须是有效且不晚于今天的日期。');
+  }
+  if (profile.idExpiryDate && !dateIsValid(profile.idExpiryDate)) {
+    throw new ApiError(400, '证件有效期限无效。');
   }
   return profile;
 }
@@ -1101,13 +1111,13 @@ async function sanitizeSalaryRecord(
   input: SalaryRecord,
   existing: SalaryRecord | null,
 ) {
-  const id = cleanString(input.id, 120);
+  const id = cleanStringStrict(input.id, 120, '工资记录编号');
   if (!/^salary-[a-zA-Z0-9-]{8,110}$/.test(id)) throw new ApiError(400, '工资记录编号无效。');
-  const workDate = cleanString(input.workDate, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(workDate) || Number.isNaN(Date.parse(`${workDate}T00:00:00Z`))) {
+  const workDate = cleanStringStrict(input.workDate, 10, '工作日期');
+  if (!dateIsValid(workDate)) {
     throw new ApiError(400, '工作日期无效。');
   }
-  const departmentKey = cleanString(input.departmentKey, 120);
+  const departmentKey = cleanStringStrict(input.departmentKey, 120, '工作所属部门');
   const department = await db.prepare(`SELECT id, label FROM payroll_departments
     WHERE id = ? AND active = 1`).bind(departmentKey).first<{ id: string; label: string }>();
   const applyType = Number(input.applyType) as SalaryRecord['applyType'];
@@ -1128,14 +1138,14 @@ async function sanitizeSalaryRecord(
     departmentLabel: department.label,
     currency,
     applyType,
-    workContent: cleanString(input.workContent, 2000),
-    memo: cleanString(input.memo, 2000),
+    workContent: cleanStringStrict(input.workContent, SALARY_TEXT_MAX_LENGTH, '工作内容'),
+    memo: cleanStringStrict(input.memo, SALARY_TEXT_MAX_LENGTH, '备注'),
     rate: boundedNumber(input.rate, 0, 10_000_000),
-    startTime: cleanString(input.startTime, 5),
-    endTime: cleanString(input.endTime, 5),
+    startTime: cleanStringStrict(input.startTime, 5, '开始时间'),
+    endTime: cleanStringStrict(input.endTime, 5, '结束时间'),
     amount: boundedNumber(input.amount, 0, 10_000_000),
-    travelStart: cleanString(input.travelStart, 300),
-    travelEnd: cleanString(input.travelEnd, 300),
+    travelStart: cleanStringStrict(input.travelStart, 300, '交通出发地'),
+    travelEnd: cleanStringStrict(input.travelEnd, 300, '交通到达地'),
     travelFee: boundedNumber(input.travelFee, 0, 10_000_000),
     totalHours: 0,
     workHours: 0,
@@ -1148,7 +1158,7 @@ async function sanitizeSalaryRecord(
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   });
-  if ((applyType === 1 || applyType === 7) && record.restHours > record.totalHours) {
+  if ((applyType === 1 || applyType === 7) && Math.round(record.restHours * 60) > getWorkMinutes(record.startTime, record.endTime)) {
     throw new ApiError(400, '中间休息时间不能超过开始至结束的总时长。');
   }
   if ((applyType === 1 || applyType === 7) && record.totalHours <= 0) {
@@ -1325,9 +1335,9 @@ async function activeWorkManagers(db: D1Database): Promise<WorkManagerOption[]> 
 
 async function resolveWorkManager(db: D1Database, requestedId: unknown, legacyLabel: unknown) {
   const managers = await activeWorkManagers(db);
-  const id = cleanString(requestedId, 120);
+  const id = cleanStringStrict(requestedId, 120, '工作负责人');
   if (id) return managers.find((manager) => manager.id === id) ?? null;
-  const label = cleanString(legacyLabel, 100);
+  const label = cleanStringStrict(legacyLabel, 100, '工作负责人');
   return managers.find((manager) => manager.label === label || manager.email === label) ?? null;
 }
 
@@ -1477,6 +1487,14 @@ function base64ToBytes(value: string) {
 
 function cleanString(value: unknown, maximumLength: number) {
   return typeof value === 'string' ? value.trim().slice(0, maximumLength) : '';
+}
+
+function cleanStringStrict(value: unknown, maximumLength: number, label: string) {
+  if (typeof value !== 'string') return '';
+  if (value.length > maximumLength) {
+    throw new ApiError(400, `${label}不能超过 ${maximumLength} 个字符。`);
+  }
+  return value.trim();
 }
 
 function cleanFileKeys(value: unknown, maximum: number) {

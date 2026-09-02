@@ -11,7 +11,7 @@ import {
   ManagedUser,
   ROLE_LABELS,
 } from '../lib/payroll';
-import { StatusMessage } from './form-controls';
+import { StatusMessage, invalidFormControlMessage } from './form-controls';
 import { AuditTrailPanel } from './payroll-ui';
 
 export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
@@ -190,7 +190,14 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
         <div className="section-heading-inline">
           <div><h2>工作所属部门</h2></div>
         </div>
-        <form className="department-add-form" onSubmit={addDepartment}>
+        <form
+          className="department-add-form"
+          onSubmit={addDepartment}
+          onInvalidCapture={(event) => {
+            setTone('error');
+            setMessage(invalidFormControlMessage(event));
+          }}
+        >
           <input value={departmentLabel} onChange={(event) => setDepartmentLabel(event.target.value)} placeholder="新部门选项名称" maxLength={80} required />
           <button type="submit" className="primary-button" disabled={busyId === 'department-new'}>增加</button>
         </form>
@@ -289,9 +296,12 @@ function PasswordResetDialog({ user, onClose, onSuccess }: { user: ManagedUser; 
     <div className="modal-backdrop" role="presentation">
       <section className="small-modal" role="dialog" aria-modal="true" aria-labelledby="admin-password-title">
         <header><div><h2 id="admin-password-title">重置 {user.displayName} 的密码</h2></div><button className="icon-button" type="button" onClick={onClose}>×</button></header>
-        <form onSubmit={submit}>
-          <label><span>新临时密码</span><input type="password" minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
-          <label><span>确认临时密码</span><input type="password" minLength={8} value={confirm} onChange={(event) => setConfirm(event.target.value)} required /></label>
+        <form
+          onSubmit={submit}
+          onInvalidCapture={(event) => setMessage(invalidFormControlMessage(event))}
+        >
+          <label><span>新临时密码</span><input type="password" minLength={8} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
+          <label><span>确认临时密码</span><input type="password" minLength={8} maxLength={128} value={confirm} onChange={(event) => setConfirm(event.target.value)} required /></label>
           <StatusMessage message={message} tone="error" />
           <footer><button type="button" className="secondary-button" onClick={onClose}>取消</button><button type="submit" className="primary-button" disabled={busy}>{busy ? '处理中…' : '确认重置'}</button></footer>
         </form>
