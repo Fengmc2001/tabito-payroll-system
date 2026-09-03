@@ -1,6 +1,8 @@
 import { stat } from 'node:fs/promises';
 import {
   BOOTSTRAP_ADMIN_EMAIL,
+  GRAY_FIXTURE_CNY_TO_JPY,
+  GRAY_MONTHLY_LIMIT_JPY_EQUIVALENT,
   PayrollClient,
   accountSpecs,
   assert,
@@ -9,6 +11,7 @@ import {
   credentialPath,
   currentMonthShanghai,
   grayBaseUrl,
+  grayExpectedSalarySpecs,
   loadCredentials,
 } from './gray-fixture-common.mjs';
 
@@ -65,34 +68,47 @@ for (const spec of accountSpecs) {
   for (const record of grayRecords) allRecords.set(record.id, { ...record, accountKey: spec.key });
 }
 
-const expected = [
-  { key: 'lingling', slug: 'lingling-commission', currency: 'JPY', count: 1, total: 42_000, status: 3 },
-  { key: 'aiwei', slug: 'aiwei-teaching', currency: 'JPY', count: 1, total: 36_000, status: 3 },
-  { key: 'aiwei', slug: 'aiwei-management', currency: 'JPY', count: 1, total: 24_000, status: 2 },
-  { key: 'up', slug: 'up-management', currency: 'JPY', count: 1, total: 36_000, status: 3 },
-  { key: 'awen', slug: 'awen-management', currency: 'JPY', count: 1, total: 40_000, status: 2 },
-  { key: 'john', slug: 'john-management', currency: 'JPY', count: 1, total: 32_000, status: 3 },
-  { key: 'teacher-a', slug: 'teacher-a-jpy', currency: 'JPY', count: 4, total: 24_000, status: 3 },
-  { key: 'teacher-b', slug: 'teacher-b-jpy', currency: 'JPY', count: 4, total: 33_600, status: 2 },
-  { key: 'teacher-c', slug: 'teacher-c-jpy', currency: 'JPY', count: 4, total: 25_600, status: 4 },
-  { key: 'teacher-d', slug: 'teacher-d-jpy', currency: 'JPY', count: 4, total: 24_000, status: 3 },
-  { key: 'teacher-d', slug: 'teacher-d-cny', currency: 'CNY', count: 1, total: 1_600, status: 2 },
-  { key: 'teacher-e', slug: 'teacher-e-jpy', currency: 'JPY', count: 4, total: 24_000, status: 2 },
-  { key: 'teacher-f', slug: 'teacher-f-cny', currency: 'CNY', count: 4, total: 1_440, status: 3 },
-  { key: 'teacher-g', slug: 'teacher-g-cny', currency: 'CNY', count: 4, total: 3_200, status: 4 },
-];
-
-for (const spec of expected) {
+for (const spec of grayExpectedSalarySpecs) {
   const marker = `[GRAY-v1:${spec.slug}:${month}]`;
   const matching = [...allRecords.values()].filter((record) => record.accountKey === spec.key && record.memo === marker);
   check(matching.length === spec.count, `${spec.slug} 有 ${spec.count} 条且无重复`);
   check(matching.every((record) => record.currency === spec.currency), `${spec.slug} 币种为 ${spec.currency}`);
+  check(matching.every((record) => record.applyType === spec.applyType), `${spec.slug} 申报类别正确`);
+  const expectedDepartmentKey = spec.slug.includes('teaching') || spec.slug.startsWith('teacher-')
+    ? 'dept-teaching'
+    : 'dept-affairs';
+  check(
+    matching.every((record) => record.departmentKey === expectedDepartmentKey),
+    `${spec.slug} 工作所属部门正确`,
+  );
+  check(
+    matching.every((record) => record.workContent.includes(spec.label)),
+    `${spec.slug} 工作内容与样例定义一致`,
+  );
+  if (spec.applyType === 1) {
+    check(
+      matching.every((record) => record.rate === spec.hourlyRate
+        && record.workHours === 2
+        && record.restHours === 0
+        && record.finalSalary === record.rate * 2),
+      `${spec.slug} 按时工资由两小时工时与时薪计算`,
+    );
+  }
   check(matching.every((record) => record.status === spec.status), `${spec.slug} 状态为 ${spec.status}`);
   check(matching.reduce((sum, record) => sum + record.finalSalary, 0) === spec.total, `${spec.slug} 月度合计正确`);
 }
 
 check(allRecords.size === 35, '灰度工资共 35 条');
-check([...allRecords.values()].every((record) => record.finalSalary > 0 && record.finalSalary < 100_000), '每条灰度工资都在 0–100,000 之间');
+check([...allRecords.values()].every((record) => record.finalSalary > 0), '每条灰度工资金额均为正数');
+const monthlyTotals = monthlyTotalsByAccount([...allRecords.values()]);
+for (const spec of accountSpecs) {
+  const totals = monthlyTotals.get(spec.key) || { JPY: 0, CNY: 0 };
+  const jpyEquivalent = totals.JPY + totals.CNY * GRAY_FIXTURE_CNY_TO_JPY;
+  check(
+    jpyEquivalent <= GRAY_MONTHLY_LIMIT_JPY_EQUIVALENT,
+    `${spec.name} 测试月合计不超过 JPY ${GRAY_MONTHLY_LIMIT_JPY_EQUIVALENT.toLocaleString()} 等值`,
+  );
+}
 check(new Set([...allRecords.values()].map((record) => record.status)).size === 3, '待审、通过、驳回三种状态齐全');
 check(
   new Set([...allRecords.values()].filter((record) => record.accountKey === 'teacher-f').map((record) => record.currency)).size === 1
@@ -119,10 +135,41 @@ check(rules.every((rule) => rule.active && rule.startMonth === month), '灰度�
 check(rules.every((rule) => rule.schedule.rangeStart.endsWith('-01') && rule.schedule.rangeEnd.endsWith('-28')), '自动规律使用每月固定日期范围');
 
 const audit = await client.expect('/api/admin/audit-logs?limit=200', 200, { cookie: admin.cookie });
-const actions = new Set(audit.data.logs.map((log) => log.action));
+const auditYear = month.slice(0, 4);
+const adminOverview = await client.expect(
+  `/api/audit/overview?year=${auditYear}&month=${month}&userId=${encodeURIComponent(admin.account.id)}`,
+  200,
+  { cookie: admin.cookie },
+);
+const aiweiAccount = sessions.get('aiwei').account;
+const aiweiOverview = await client.expect(
+  `/api/audit/overview?year=${auditYear}&month=${month}&userId=${encodeURIComponent(aiweiAccount.id)}`,
+  200,
+  { cookie: admin.cookie },
+);
+const scopedAuditLogs = [...adminOverview.data.overview.accountLogs, ...aiweiOverview.data.overview.accountLogs];
+const actions = new Set([...audit.data.logs, ...scopedAuditLogs].map((log) => log.action));
 for (const action of ['salary.proxy_batch_submit', 'salary.proxy_submit', 'salary.rule_create', 'salary.approve', 'salary.reject']) {
   check(actions.has(action), `审计记录包含 ${action}`);
 }
+const adminOwnRecord = [...allRecords.values()].find((record) => record.accountKey === 'lingling');
+const reviewerOwnRecord = [...allRecords.values()].find(
+  (record) => record.accountKey === 'aiwei' && record.memo.includes(':aiwei-teaching:'),
+);
+check(
+  adminOverview.data.overview.accountLogs.some((log) => log.action === 'salary.approve'
+    && log.targetId === adminOwnRecord?.id
+    && log.actorUserId === admin.account.id
+    && log.detail.ownerUserId === admin.account.id),
+  '管理员可审核本人申报且审计来源完整',
+);
+check(
+  aiweiOverview.data.overview.accountLogs.some((log) => log.action === 'salary.approve'
+    && log.targetId === reviewerOwnRecord?.id
+    && log.actorUserId === aiweiAccount.id
+    && log.detail.ownerUserId === aiweiAccount.id),
+  '审核员可审核本人申报且审计来源完整',
+);
 
 const teacherA = sessions.get('teacher-a');
 const reviewer = sessions.get('up');
@@ -158,6 +205,11 @@ process.stdout.write(`${JSON.stringify({
   rules: rules.length,
   statusCounts: countBy([...allRecords.values()], (record) => String(record.status)),
   currencyCounts: countBy([...allRecords.values()], (record) => record.currency),
+  monthlyTotals: Object.fromEntries(monthlyTotals),
+  fixtureMonthlyLimit: {
+    jpyEquivalent: GRAY_MONTHLY_LIMIT_JPY_EQUIVALENT,
+    cnyToJpy: GRAY_FIXTURE_CNY_TO_JPY,
+  },
 }, null, 2)}\n`);
 
 async function expectForbidden(path, cookie, label) {
@@ -176,4 +228,14 @@ function countBy(items, selector) {
     counts[key] = (counts[key] || 0) + 1;
     return counts;
   }, {});
+}
+
+function monthlyTotalsByAccount(records) {
+  const totals = new Map();
+  for (const record of records) {
+    const current = totals.get(record.accountKey) || { JPY: 0, CNY: 0 };
+    current[record.currency] += record.finalSalary;
+    totals.set(record.accountKey, current);
+  }
+  return totals;
 }

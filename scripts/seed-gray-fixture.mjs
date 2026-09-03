@@ -10,7 +10,11 @@ import {
   credentialPath,
   currentMonthShanghai,
   digest,
+  grayAdminSalarySpec,
   grayBaseUrl,
+  grayDelegatedSalarySpec,
+  grayStaffSalarySpecs,
+  grayTeacherSalarySpecs,
   loadOrCreateCredentials,
   minimalPdf,
 } from './gray-fixture-common.mjs';
@@ -119,31 +123,16 @@ const adminUserId = adminSession.account.id;
 const adminRecord = await ensureAdminCommission(adminSession);
 seededRecords.set(adminRecord.id, adminRecord);
 
-const salarySpecs = [
-  { key: 'aiwei', slug: 'aiwei-teaching', currency: 'JPY', total: 36_000, label: '授课与备课', decision: 'approve' },
-  { key: 'aiwei', slug: 'aiwei-management', currency: 'JPY', total: 24_000, label: '教学管理', decision: 'pending' },
-  { key: 'up', slug: 'up-management', currency: 'JPY', total: 36_000, label: '运营管理', decision: 'approve' },
-  { key: 'awen', slug: 'awen-management', currency: 'JPY', total: 40_000, label: '事务管理', decision: 'pending' },
-  { key: 'john', slug: 'john-management', currency: 'JPY', total: 32_000, label: '项目管理', decision: 'approve' },
-];
-
-for (const [index, spec] of salarySpecs.entries()) {
+for (const [index, spec] of grayStaffSalarySpecs.entries()) {
   const target = sessions.get(spec.key).account;
   const records = await ensureCalendarBatch(target, spec, index + 3);
-  await setDecision(records, spec.decision, adminSession.cookie);
+  const reviewerCookie = spec.key === 'aiwei' && spec.decision === 'approve'
+    ? sessions.get('aiwei').cookie
+    : adminSession.cookie;
+  await setDecision(records, spec.decision, reviewerCookie);
 }
 
-const teacherSpecs = [
-  { key: 'teacher-a', currency: 'JPY', total: 24_000, unit: 6_000, decision: 'approve' },
-  { key: 'teacher-b', currency: 'JPY', total: 33_600, unit: 8_400, decision: 'pending' },
-  { key: 'teacher-c', currency: 'JPY', total: 25_600, unit: 6_400, decision: 'reject' },
-  { key: 'teacher-d', currency: 'JPY', total: 24_000, unit: 6_000, decision: 'approve' },
-  { key: 'teacher-e', currency: 'JPY', total: 24_000, unit: 6_000, decision: 'pending' },
-  { key: 'teacher-f', currency: 'CNY', total: 1_440, unit: 360, decision: 'approve' },
-  { key: 'teacher-g', currency: 'CNY', total: 3_200, unit: 800, decision: 'reject' },
-];
-
-for (const spec of teacherSpecs) {
+for (const spec of grayTeacherSalarySpecs) {
   const target = sessions.get(spec.key).account;
   const records = await ensureRecurringTeachingBatch(target, spec);
   const actualTotal = records.reduce((sum, record) => sum + record.finalSalary, 0);
@@ -151,17 +140,15 @@ for (const spec of teacherSpecs) {
   await setDecision(records, spec.decision, adminSession.cookie);
 }
 
-const dCny = await ensureDelegatedSingle(sessions.get('teacher-d').account, {
-  slug: 'teacher-d-cny',
-  currency: 'CNY',
-  total: 1_600,
-  label: '中国区教学资料支援',
-});
-await setDecision([dCny], 'pending', adminSession.cookie);
+const dCny = await ensureDelegatedSingle(
+  sessions.get(grayDelegatedSalarySpec.key).account,
+  grayDelegatedSalarySpec,
+);
+await setDecision([dCny], grayDelegatedSalarySpec.decision, adminSession.cookie);
 
-// A reviewer approves the administrator's commission, covering reviewer authority
-// without allowing the administrator to audit their own fixture entry.
-await setDecision([adminRecord], 'approve', sessions.get('aiwei').cookie);
+// The selected operating policy permits reviewers and administrators to approve
+// their own submissions. The gray fixture deliberately exercises both cases.
+await setDecision([adminRecord], grayAdminSalarySpec.decision, adminSession.cookie);
 
 const rulesResponse = await client.expect('/api/staff/payroll/rules', 200, { cookie: adminSession.cookie });
 const grayRules = rulesResponse.data.rules.filter((rule) => rule.title.startsWith('[GRAY v1]'));
@@ -268,7 +255,7 @@ async function completeProfile(session, spec, index) {
 }
 
 async function ensureAdminCommission(session) {
-  const marker = markerFor('lingling-commission');
+  const marker = markerFor(grayAdminSalarySpec.slug);
   const existing = session.account.salaryRecords.find((record) => record.memo === marker && record.workDate.startsWith(month));
   if (existing) {
     for (const key of existing.attachments) seededFiles.add(key);
@@ -290,10 +277,7 @@ async function ensureAdminCommission(session) {
   );
   seededFiles.add(proof.key);
   const record = salaryTemplate(session.account, {
-    slug: 'lingling-commission',
-    currency: 'JPY',
-    total: 42_000,
-    label: '当月招生与业务佣金',
+    ...grayAdminSalarySpec,
     date: `${month}-02`,
     attachments: [proof.key],
   });
@@ -327,7 +311,12 @@ async function ensureCalendarBatch(target, spec, day) {
       mode: 'calendar',
       submit: true,
       template,
-      calendarSessions: [{ workDate: template.workDate, startTime: '09:00', endTime: '10:00', restHours: 0 }],
+      calendarSessions: [{
+        workDate: template.workDate,
+        startTime: template.startTime,
+        endTime: template.endTime,
+        restHours: 0,
+      }],
       recurring: { enabled: false, title: '', startMonth: month, endMonth: '' },
     },
   });
@@ -341,7 +330,9 @@ async function ensureRecurringTeachingBatch(target, spec) {
     slug,
     currency: spec.currency,
     total: spec.unit,
-    label: '固定授课',
+    hourlyRate: spec.unit / 2,
+    applyType: spec.applyType,
+    label: spec.label,
     date: `${month}-01`,
   });
   const firstWeekday = new Date(`${month}-01T00:00:00Z`).getUTCDay();
@@ -434,6 +425,7 @@ async function setDecision(records, decision, cookie) {
 
 function salaryTemplate(target, spec) {
   const timestamp = new Date().toISOString();
+  const applyType = spec.applyType ?? 6;
   return {
     id: `salary-gray-v1-${spec.slug}-${month.replace('-', '')}`,
     userId: target.id,
@@ -443,12 +435,12 @@ function salaryTemplate(target, spec) {
     departmentKey: spec.slug.includes('teaching') || spec.slug.startsWith('teacher-') ? 'dept-teaching' : 'dept-affairs',
     departmentLabel: spec.slug.includes('teaching') || spec.slug.startsWith('teacher-') ? '教学部' : '事务部',
     currency: spec.currency,
-    applyType: 6,
+    applyType,
     workContent: `灰度测试：${spec.label}`,
     memo: markerFor(spec.slug),
-    rate: spec.total,
-    startTime: '09:00',
-    endTime: '10:00',
+    rate: applyType === 1 ? spec.hourlyRate : spec.total,
+    startTime: spec.startTime || '09:00',
+    endTime: spec.endTime || '10:00',
     amount: 0,
     travelStart: '',
     travelEnd: '',

@@ -294,7 +294,7 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
 .brand-lockup strong { display: flex; align-items: center; gap: 8px; }
 .brand-lockup span { color: rgb(255 255 255 / 66%); font-size: 11px; letter-spacing: .15em; }
 
-.app-nav { display: grid; gap: 6px; margin-top: 24px; }
+.app-nav { display: grid; gap: 6px; min-height: 0; margin-top: 24px; overflow-y: auto; padding-right: 3px; }
 
 .app-nav button {
   display: flex;
@@ -319,6 +319,27 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
 }
 .app-nav button.is-active { box-shadow: inset 3px 0 #e2b658; }
 .app-nav button:disabled { color: rgb(255 255 255 / 35%); }
+
+.app-nav__group { display: grid; gap: 2px; }
+.app-nav button.app-nav__parent.is-group-active { color: #fff; background: rgb(255 255 255 / 7%); }
+.app-nav__children {
+  position: relative;
+  display: grid;
+  gap: 2px;
+  margin: -1px 0 5px;
+  padding-left: 24px;
+}
+.app-nav__children::before {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 14px;
+  width: 1px;
+  background: rgb(255 255 255 / 17%);
+  content: '';
+}
+.app-nav button.app-nav__child { gap: 8px; padding: 8px 10px; border-radius: 5px; font-size: 12px; }
+.app-nav button.app-nav__child .nav-icon { opacity: .72; }
 
 .account-menu {
   display: grid;
@@ -819,19 +840,10 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
 .employee-directory button { display: grid; gap: 3px; border: 1px solid transparent; border-radius: 6px; padding: 10px 11px; color: #4a5874; text-align: left; background: transparent; }
 .employee-directory button:hover,
 .employee-directory button.is-active { color: var(--xly-navy); border-color: #d8e0f0; background: #eef3fc; }
-.employee-directory .employee-directory__transfer { margin-bottom: 6px; border-color: #cbd6ec; background: #f7f9fe; }
-.employee-directory .employee-directory__transfer strong { color: var(--xly-navy-deep); }
-.employee-directory .employee-directory__transfer strong { display: flex; align-items: center; gap: 6px; }
 .employee-directory button strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .employee-directory button span,
 .employee-directory button small { overflow: hidden; color: var(--xly-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .employee-detail { min-width: 0; }
-.employee-layout--summary .employee-directory { grid-column: 1; grid-row: 1; max-height: 230px; }
-.employee-layout--summary .employee-detail,
-.employee-layout--summary .transfer-sheet { display: contents; }
-.employee-layout--summary .transfer-sheet__top { grid-column: 2; grid-row: 1; min-width: 0; }
-.employee-layout--summary .transfer-table-wrap,
-.employee-layout--summary > .employee-detail > .empty-state { grid-column: 1 / -1; grid-row: 2; }
 .employee-detail__heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 20px; }
 .employee-detail__heading h2 { margin: 0; color: var(--xly-navy-deep); font-size: 20px; }
 .employee-detail__heading p { margin: 5px 0 0; color: var(--xly-muted); font-size: 12px; }
@@ -909,35 +921,6 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
 }
 .payroll-route__header h1 { margin: 4px 0 0; font-size: 22px; }
 .payroll-route__panel { min-width: 0; }
-.salary-subtabs {
-  display: inline-flex;
-  gap: 3px;
-  padding: 4px;
-  border: 1px solid #e2e6ef;
-  border-radius: 7px;
-  background: #f5f7fb;
-}
-.salary-subtabs button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  min-height: 36px;
-  border: 0;
-  border-radius: 5px;
-  padding: 7px 12px;
-  color: #67728b;
-  background: transparent;
-  font-size: 13px;
-  font-weight: 650;
-  white-space: nowrap;
-}
-.salary-subtabs button:hover { color: var(--xly-navy); background: rgb(255 255 255 / 70%); }
-.salary-subtabs button.is-active {
-  color: var(--xly-navy-deep);
-  background: #fff;
-  box-shadow: 0 1px 4px rgb(31 47 85 / 12%);
-}
 .workspace-panel-title { margin: 0; color: var(--xly-navy-deep); font-size: 19px; line-height: 1.4; }
 .delegated-workspace > .status-message,
 .batch-payroll-form > .status-message { margin-bottom: 18px; }
@@ -1065,8 +1048,12 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
     padding: 16px 22px 0;
   }
   .brand-lockup { border-bottom: 0; padding: 0; }
-  .app-nav { grid-row: 2; grid-column: 1 / -1; display: flex; overflow-x: auto; margin: 0 -6px; }
+  .app-nav { grid-row: 2; grid-column: 1 / -1; display: flex; overflow-x: auto; overflow-y: hidden; margin: 0 -6px; padding-right: 0; }
+  .app-nav__group { display: flex; align-items: center; flex: 0 0 auto; }
+  .app-nav__children { display: flex; margin: 0; padding-left: 0; }
+  .app-nav__children::before { display: none; }
   .app-nav button { flex: 0 0 auto; padding: 11px 14px; }
+  .app-nav button.app-nav__child { padding: 9px 10px; }
   .app-nav button:hover,
   .app-nav button.is-active { transform: none; }
   .account-menu { display: flex; align-items: center; margin: 0; border-top: 0; padding: 0; }
@@ -1084,7 +1071,6 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
   .audit-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .transfer-table { min-width: 900px; }
   .payroll-route__header { align-items: flex-start; flex-direction: column; }
-  .salary-subtabs { max-width: 100%; overflow-x: auto; }
   .form-grid--three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .recurring-rule-card { grid-template-columns: minmax(0, 1fr) auto; }
   .recurring-rule-actions { grid-column: 1 / -1; }
@@ -1139,8 +1125,6 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
   .salary-calculation span:last-child { border-bottom: 0; }
   .notification-popup { top: 12px; right: 16px; left: 16px; width: auto; }
   .payroll-route__header { padding: 19px 18px; }
-  .salary-subtabs { width: 100%; }
-  .salary-subtabs button { flex: 1 0 auto; }
   .form-grid--three { grid-template-columns: 1fr; }
   .target-picker { width: 100%; }
   .target-picker select,

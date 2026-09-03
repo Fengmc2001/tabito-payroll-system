@@ -1,17 +1,14 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Download, FileSpreadsheet, Paperclip } from 'lucide-react';
 import { ApiClientError, apiRequest } from '../lib/api-client';
 import {
   ACCOUNT_STATUS_LABELS,
-  CurrencyAmounts,
   EmployeeDetail,
   EmployeeSummary,
   Profile,
   ROLE_LABELS,
   STATUS,
-  TransferSheetRow,
   currentMonth,
   emptyCurrencyAmounts,
   getApplyTypeLabel,
@@ -20,14 +17,12 @@ import {
 import { AuditTrailPanel, CurrencyAmountsView, Money } from './payroll-ui';
 import { StatusMessage } from './form-controls';
 
-const TRANSFER_VIEW_ID = 'transfer-sheet';
-
 export function EmployeeWorkspace() {
   const [employees, setEmployees] = useState<EmployeeSummary[]>([]);
-  const [selectedId, setSelectedId] = useState(TRANSFER_VIEW_ID);
+  const [selectedId, setSelectedId] = useState('');
   const [detail, setDetail] = useState<EmployeeDetail | null>(null);
-  const [transferRows, setTransferRows] = useState<TransferSheetRow[]>([]);
   const [month, setMonth] = useState(currentMonth);
+  const [detailRevision, setDetailRevision] = useState(0);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
 
@@ -36,32 +31,9 @@ export function EmployeeWorkspace() {
     try {
       const result = await apiRequest<{ employees: EmployeeSummary[] }>('/api/staff/employees');
       setEmployees(result.employees);
-      setMessage('');
-    } catch (error) {
-      setMessage(errorText(error));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const loadDetail = useCallback(async (userId: string) => {
-    setLoading(true);
-    try {
-      const result = await apiRequest<{ employee: EmployeeDetail }>(`/api/staff/employees/${userId}`);
-      setDetail(result.employee);
-      setMessage('');
-    } catch (error) {
-      setMessage(errorText(error));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const loadTransferSheet = useCallback(async (selectedMonth: string) => {
-    setLoading(true);
-    try {
-      const result = await apiRequest<{ rows: TransferSheetRow[] }>(`/api/staff/transfer-sheet?month=${encodeURIComponent(selectedMonth)}`);
-      setTransferRows(result.rows);
+      setSelectedId((current) => result.employees.some((employee) => employee.id === current)
+        ? current
+        : result.employees[0]?.id || '');
       setMessage('');
     } catch (error) {
       setMessage(errorText(error));
@@ -73,7 +45,7 @@ export function EmployeeWorkspace() {
   useEffect(() => {
     let cancelled = false;
     void apiRequest<{ employees: EmployeeSummary[] }>('/api/staff/employees')
-      .then((result) => { if (!cancelled) { setEmployees(result.employees); setMessage(''); } })
+      .then((result) => { if (!cancelled) { setEmployees(result.employees); setSelectedId((current) => result.employees.some((employee) => employee.id === current) ? current : result.employees[0]?.id || ''); setMessage(''); } })
       .catch((error) => { if (!cancelled) setMessage(errorText(error)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -81,19 +53,14 @@ export function EmployeeWorkspace() {
 
   useEffect(() => {
     let cancelled = false;
-    if (selectedId === TRANSFER_VIEW_ID) {
-      void apiRequest<{ rows: TransferSheetRow[] }>(`/api/staff/transfer-sheet?month=${encodeURIComponent(month)}`)
-        .then((result) => { if (!cancelled) { setTransferRows(result.rows); setMessage(''); } })
-        .catch((error) => { if (!cancelled) setMessage(errorText(error)); })
-        .finally(() => { if (!cancelled) setLoading(false); });
-    } else if (selectedId) {
+    if (selectedId) {
       void apiRequest<{ employee: EmployeeDetail }>(`/api/staff/employees/${selectedId}`)
         .then((result) => { if (!cancelled) { setDetail(result.employee); setMessage(''); } })
         .catch((error) => { if (!cancelled) setMessage(errorText(error)); })
         .finally(() => { if (!cancelled) setLoading(false); });
     }
     return () => { cancelled = true; };
-  }, [month, selectedId]);
+  }, [detailRevision, month, selectedId]);
 
   const selectedSummary = employees.find((employee) => employee.id === selectedId);
   const duplicateEmployeeNames = useMemo(() => duplicateNames(employees), [employees]);
@@ -110,8 +77,8 @@ export function EmployeeWorkspace() {
 
   const refreshCurrent = async () => {
     await loadEmployees();
-    if (selectedId === TRANSFER_VIEW_ID) await loadTransferSheet(month);
-    else if (selectedId) await loadDetail(selectedId);
+    setLoading(true);
+    setDetailRevision((current) => current + 1);
   };
 
   return (
@@ -121,37 +88,19 @@ export function EmployeeWorkspace() {
         <button type="button" className="secondary-button" disabled={loading} onClick={() => void refreshCurrent()}>刷新</button>
       </div>
       <StatusMessage message={message} tone="error" />
-      <div className={selectedId === TRANSFER_VIEW_ID ? 'employee-layout employee-layout--summary' : 'employee-layout'}>
+      <div className="employee-layout">
         <aside className="employee-directory">
           <h2>账号目录</h2>
-          <button
-            type="button"
-            className={selectedId === TRANSFER_VIEW_ID ? 'employee-directory__transfer is-active' : 'employee-directory__transfer'}
-            onClick={() => {
-              setLoading(true);
-              setSelectedId(TRANSFER_VIEW_ID);
-              if (selectedId === TRANSFER_VIEW_ID) void loadTransferSheet(month);
-            }}
-          >
-            <strong><FileSpreadsheet size={15} aria-hidden="true" />工资汇总</strong><small>{month}</small>
-          </button>
           {employees.map((employee) => <button key={employee.id} type="button" className={selectedId === employee.id ? 'is-active' : ''} onClick={() => {
             setLoading(true);
             setSelectedId(employee.id);
-            if (selectedId === employee.id) void loadDetail(employee.id);
+            if (selectedId === employee.id) setDetailRevision((current) => current + 1);
           }}>
             <strong>{employee.displayName}</strong><small>{duplicateEmployeeNames.has(employee.displayName) ? `${employee.email} · ` : ''}{ROLE_LABELS[employee.role]} · {ACCOUNT_STATUS_LABELS[employee.status]} · {employee.recordCount} 条</small>
           </button>)}
         </aside>
         <div className="employee-detail">
-          {selectedId === TRANSFER_VIEW_ID ? (
-            <TransferSheetPanel
-              month={month}
-              rows={transferRows}
-              loading={loading}
-              onMonthChange={(nextMonth) => { setLoading(true); setMonth(nextMonth); }}
-            />
-          ) : loading && (!detail || detail.user.id !== selectedId) ? (
+          {selectedId && (!detail || detail.user.id !== selectedId) ? (
             <div className="empty-state">正在加载员工档案…</div>
           ) : !detail || !selectedSummary ? (
             <div className="empty-state">请选择员工账号。</div>
@@ -185,56 +134,6 @@ export function EmployeeWorkspace() {
       </div>
     </section>
   );
-}
-
-function TransferSheetPanel({
-  month,
-  rows,
-  loading,
-  onMonthChange,
-}: {
-  month: string;
-  rows: TransferSheetRow[];
-  loading: boolean;
-  onMonthChange: (month: string) => void;
-}) {
-  const jpyTotal = sumApproved(rows, 'JPY');
-  const cnyTotal = sumApproved(rows, 'CNY');
-  return <section className="transfer-sheet">
-    <div className="transfer-sheet__top">
-      <div className="employee-detail__heading">
-        <div><h2>工资汇总</h2></div>
-        <div className="heading-actions">
-          <label className="month-picker"><span>查看月份</span><input type="month" value={month} onChange={(event) => onMonthChange(event.target.value || currentMonth())} /></label>
-          <button type="button" className="primary-button button-with-icon" disabled={loading || rows.length === 0} onClick={() => downloadTransferSheet(rows, month)}><Download size={15} aria-hidden="true" />导出 Excel</button>
-        </div>
-      </div>
-      <div className="transfer-sheet__summary">
-        <span><b>{rows.length}</b> 名员工</span>
-        {jpyTotal !== 0 && <span><Money amount={jpyTotal} currency="JPY" /></span>}
-        {cnyTotal !== 0 && <span><Money amount={cnyTotal} currency="CNY" /></span>}
-        {jpyTotal === 0 && cnyTotal === 0 && <span>暂无已通过工资</span>}
-      </div>
-    </div>
-    {loading && rows.length === 0 ? <div className="empty-state">正在加载…</div> : (
-      <div className="data-table-wrap transfer-table-wrap"><table className="data-table transfer-table">
-        <thead><tr><th>姓名</th><th>联系方式</th><th>收款方式</th><th>收款单位</th><th>支店</th><th>收款账号</th><th>账户名</th><th>收款人</th><th>证件号</th><th className="table-priority">已通过</th><th>PDF</th></tr></thead>
-        <tbody>{rows.map((row) => <tr key={row.user.id}>
-          <td><strong>{row.user.displayName}</strong></td>
-          <td className="transfer-table__multiline">{row.profile.tel || '未填写'}</td>
-          <td>{paymentMethodLabel(row.profile.bankType)}</td>
-          <td className={`transfer-table__institution transfer-table__institution--${row.profile.bankType || 'empty'}`}>{row.profile.bankName || '未填写'}</td>
-          <td>{row.profile.bankBranch || '未填写'}</td>
-          <td>{row.profile.bankAccountNumber || '未填写'}</td>
-          <td>{row.profile.bankAccountHolder || '未填写'}</td>
-          <td>{row.profile.payeeName || row.user.displayName}</td>
-          <td>{row.profile.payeeIdNumber || '未填写'}</td>
-          <td className="table-priority"><CurrencyAmountsView amounts={row.approvedAmounts} /></td>
-          <td>{row.pdfFiles.length === 0 ? <span className="muted-text">无</span> : <div className="transfer-pdf-links">{row.pdfFiles.map((file, index) => <a key={file.key} href={`/api/files?key=${encodeURIComponent(file.key)}`} target="_blank" rel="noreferrer" download title={file.name}><Paperclip size={11} aria-hidden="true" />PDF {index + 1}</a>)}</div>}</td>
-        </tr>)}</tbody>
-      </table></div>
-    )}
-  </section>;
 }
 
 function ProfileCard({ title, profile, keys, defaultOpen = false }: { title: string; profile: Profile; keys: Array<keyof Profile>; defaultOpen?: boolean }) {
@@ -276,44 +175,6 @@ function paymentMethodLabel(value: string) {
 
 function idTypeLabel(value: string) {
   return value === 'residence' ? '在留卡' : value === 'china-id' ? '中国居民身份证' : value === 'passport' ? '护照' : '未填写';
-}
-
-function sumApproved(rows: TransferSheetRow[], currency: keyof CurrencyAmounts) {
-  return rows.reduce((sum, row) => sum + row.approvedAmounts[currency], 0);
-}
-
-function downloadTransferSheet(rows: TransferSheetRow[], month: string) {
-  const headers = ['员工姓名', '联系方式', '收款方式', '收款单位', '支店', '收款账号', '账户名', '收款人姓名', '收款人证件号', `${month} 日元 JPY`, `${month} 人民币 CNY`];
-  const body = rows.map((row) => [
-    row.user.displayName,
-    row.profile.tel,
-    paymentMethodLabel(row.profile.bankType),
-    row.profile.bankName,
-    row.profile.bankBranch,
-    row.profile.bankAccountNumber,
-    row.profile.bankAccountHolder,
-    row.profile.payeeName || row.user.displayName,
-    row.profile.payeeIdNumber,
-    row.approvedAmounts.JPY,
-    row.approvedAmounts.CNY,
-  ]);
-  const xmlRows = [headers, ...body].map((row) => `<Row>${row.map((cell) => {
-    const type = typeof cell === 'number' ? 'Number' : 'String';
-    return `<Cell><Data ss:Type="${type}">${escapeXml(String(cell))}</Data></Cell>`;
-  }).join('')}</Row>`).join('');
-  const workbook = `<?xml version="1.0" encoding="UTF-8"?><?mso-application progid="Excel.Sheet"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Worksheet ss:Name="${escapeXml(month)}"><Table>${xmlRows}</Table></Worksheet></Workbook>`;
-  const url = URL.createObjectURL(new Blob([workbook], { type: 'application/vnd.ms-excel;charset=utf-8' }));
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = `旅人教育-工资汇总-${month}.xls`;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-function escapeXml(value: string) {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }
 
 function formatFileSize(size: number) {

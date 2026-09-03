@@ -5,11 +5,14 @@ import {
   AlertTriangle,
   ArrowRight,
   BadgeCheck,
+  CalendarRange,
   ChartNoAxesCombined,
   ClipboardList,
+  FileSpreadsheet,
   History,
   LogOut,
   ShieldCheck,
+  UserPlus,
   UserRound,
   UsersRound,
   WalletCards,
@@ -22,6 +25,7 @@ import { ProfileEditor } from './components/ProfileEditor';
 import { PayrollWorkspace } from './components/PayrollWorkspace';
 import { ReviewWorkspace } from './components/ReviewWorkspace';
 import { SalaryHistory } from './components/SalaryWorkspace';
+import { TransferSheetWorkspace } from './components/TransferSheetWorkspace';
 import { Field, StatusMessage, invalidFormControlMessage } from './components/form-controls';
 import { ApiClientError, apiRequest } from './lib/api-client';
 import {
@@ -48,8 +52,11 @@ const ALL_ROUTES: AppRoute[] = [
   '/profile/first-setting',
   '/profile/setting',
   '/pay/salary',
+  '/pay/salary/single',
+  '/pay/salary/batch',
   '/pay/history',
   '/review/salary',
+  '/review/summary',
   '/admin/users',
   '/staff/employees',
   '/audit/overview',
@@ -118,20 +125,20 @@ export default function HomePage() {
       return;
     }
     if (!profileBasicsAreReady(activeAccount.profile) && route !== '/profile/first-setting') {
-      if (['/pay/salary', '/pay/history'].includes(route)) {
+      if (isPayrollRoute(route) || route === '/pay/history') {
         const message = `工资功能尚未解锁。请先补全：${profileMissingRequirements(activeAccount.profile).join('、')}。`;
         queueMicrotask(() => setProfileGateMessage(message));
       }
       navigate('/profile/first-setting');
       return;
     }
-    if (!profileIsReady(activeAccount.profile) && ['/pay/salary', '/pay/history'].includes(route)) {
+    if (!profileIsReady(activeAccount.profile) && (isPayrollRoute(route) || route === '/pay/history')) {
       const message = `工资功能尚未解锁。请先补全：${profileMissingRequirements(activeAccount.profile).join('、')}。`;
       queueMicrotask(() => setProfileGateMessage(message));
       navigate('/profile/setting');
       return;
     }
-    if (route === '/review/salary' && activeAccount.role === 'employee') {
+    if ((isDelegatedPayrollRoute(route) || isReviewRoute(route)) && activeAccount.role === 'employee') {
       navigate('/');
       return;
     }
@@ -276,7 +283,7 @@ export default function HomePage() {
   };
 
   const navigateWithinApp = (nextRoute: AppRoute) => {
-    if (activeAccount && ['/pay/salary', '/pay/history'].includes(nextRoute) && !profileIsReady(activeAccount.profile)) {
+    if (activeAccount && (isPayrollRoute(nextRoute) || nextRoute === '/pay/history') && !profileIsReady(activeAccount.profile)) {
       setProfileGateMessage(`工资功能尚未解锁。请先补全：${profileMissingRequirements(activeAccount.profile).join('、')}。`);
     } else if (!['/profile/setting', '/profile/first-setting'].includes(nextRoute)) {
       setProfileGateMessage('');
@@ -296,10 +303,11 @@ export default function HomePage() {
     <ProfileEditor profile={activeAccount.profile} firstTime onSave={saveProfile} onResetPassword={resetPassword} onUpload={uploadFile} />
   ) : route === '/profile/setting' ? (
     <ProfileEditor profile={activeAccount.profile} onSave={saveProfile} onResetPassword={resetPassword} onUpload={uploadFile} />
-  ) : route === '/pay/salary' ? (
+  ) : isPayrollRoute(route) ? (
     <PayrollWorkspace
       currentUserId={activeAccount.id}
       role={activeAccount.role}
+      mode={route === '/pay/salary/single' ? 'single' : route === '/pay/salary/batch' ? 'batch' : 'self'}
       records={activeAccount.salaryRecords}
       onSave={saveSalaryRecord}
       onDelete={deleteSalaryRecord}
@@ -311,6 +319,8 @@ export default function HomePage() {
     <SalaryHistory records={activeAccount.salaryRecords} />
   ) : route === '/review/salary' && activeAccount.role !== 'employee' ? (
     <ReviewWorkspace />
+  ) : route === '/review/summary' && activeAccount.role !== 'employee' ? (
+    <TransferSheetWorkspace />
   ) : route === '/admin/users' && activeAccount.role === 'admin' ? (
     <AdminWorkspace currentUserId={activeAccount.id} />
   ) : route === '/staff/employees' && activeAccount.role !== 'employee' ? (
@@ -446,14 +456,36 @@ function AppShell({
   const onboardingReady = profileBasicsAreReady(account.profile);
   const profileReady = profileIsReady(account.profile);
   const missingRequirements = profileMissingRequirements(account.profile);
-  const links: Array<{ route: AppRoute; label: string; icon: LucideIcon }> = [
+  const privileged = account.role === 'reviewer' || account.role === 'admin';
+  type NavItem = {
+    route: AppRoute;
+    label: string;
+    icon: LucideIcon;
+    children?: Array<{ route: AppRoute; label: string; icon: LucideIcon }>;
+  };
+  const salaryChildren: NavItem['children'] = [
+    { route: '/pay/salary', label: '本人申报', icon: UserRound },
+    ...(privileged ? [
+      { route: '/pay/salary/single' as const, label: '他人单条申报', icon: UserPlus },
+      { route: '/pay/salary/batch' as const, label: '他人多条申报', icon: CalendarRange },
+    ] : []),
+  ];
+  const links: NavItem[] = [
     { route: '/profile/setting', label: '个人&账户信息', icon: UserRound },
-    { route: '/pay/salary', label: '工资申报', icon: ClipboardList },
+    { route: '/pay/salary', label: '工资申报', icon: ClipboardList, children: privileged ? salaryChildren : undefined },
     { route: '/pay/history', label: '往期工资一览', icon: History },
   ];
-  if (account.role === 'reviewer' || account.role === 'admin') links.push({ route: '/review/salary', label: '工资审核', icon: BadgeCheck });
-  if (account.role === 'reviewer' || account.role === 'admin') links.push({ route: '/staff/employees', label: '员工管理', icon: UsersRound });
-  if (account.role === 'reviewer' || account.role === 'admin') links.push({ route: '/audit/overview', label: '总审计', icon: ChartNoAxesCombined });
+  if (privileged) links.push({
+    route: '/review/salary',
+    label: '工资审核',
+    icon: BadgeCheck,
+    children: [
+      { route: '/review/salary', label: '工资审批', icon: BadgeCheck },
+      { route: '/review/summary', label: '工资汇总', icon: FileSpreadsheet },
+    ],
+  });
+  if (privileged) links.push({ route: '/staff/employees', label: '员工管理', icon: UsersRound });
+  if (privileged) links.push({ route: '/audit/overview', label: '总审计', icon: ChartNoAxesCombined });
   if (account.role === 'admin') links.push({ route: '/admin/users', label: '账号权限', icon: ShieldCheck });
 
   return (
@@ -466,12 +498,37 @@ function AppShell({
         <nav className="app-nav" aria-label="主菜单">
           {links.map((link) => {
             const LinkIcon = link.icon;
-            return <button
-              key={link.route}
-              type="button"
-              className={route === link.route || (route === '/profile/first-setting' && link.route === '/profile/setting') ? 'is-active' : ''}
-              onClick={() => onNavigate(link.route)}
-            >
+            const linkActive = route === link.route || (route === '/profile/first-setting' && link.route === '/profile/setting');
+            const groupActive = linkActive || Boolean(link.children?.some((child) => child.route === route));
+            if (link.children) {
+              return <div className={`app-nav__group${groupActive ? ' is-active' : ''}`} key={link.label}>
+                <button
+                  type="button"
+                  className={`app-nav__parent${groupActive ? ' is-group-active' : ''}`}
+                  onClick={() => onNavigate(link.route)}
+                >
+                  <LinkIcon className="nav-icon" size={17} strokeWidth={1.9} aria-hidden="true" />
+                  <span>{link.label}</span>
+                </button>
+                <div className="app-nav__children">
+                  {link.children.map((child) => {
+                    const ChildIcon = child.icon;
+                    const childActive = child.route === route;
+                    return <button
+                      key={child.route}
+                      type="button"
+                      className={`app-nav__child${childActive ? ' is-active' : ''}`}
+                      aria-current={childActive ? 'page' : undefined}
+                      onClick={() => onNavigate(child.route)}
+                    >
+                      <ChildIcon className="nav-icon" size={14} strokeWidth={1.9} aria-hidden="true" />
+                      <span>{child.label}</span>
+                    </button>;
+                  })}
+                </div>
+              </div>;
+            }
+            return <button key={link.route} type="button" className={linkActive ? 'is-active' : ''} aria-current={linkActive ? 'page' : undefined} onClick={() => onNavigate(link.route)}>
               <LinkIcon className="nav-icon" size={17} strokeWidth={1.9} aria-hidden="true" />
               <span>{link.label}</span>
             </button>;
@@ -505,13 +562,13 @@ function LandingPage({ account, onNavigate }: { account: StoredAccount; onNaviga
     { number: '03', label: '往期工资一览', description: '查看已通过工资', route: '/pay/history', icon: History },
   ];
   if (account.role === 'reviewer' || account.role === 'admin') {
-    actions.push({ number: '04', label: '工资审核', description: '审核工资与附件', route: '/review/salary', icon: BadgeCheck });
+    actions.push({ number: '04', label: '工资审核', description: '审批工资并查看工资汇总', route: '/review/salary', icon: BadgeCheck });
   }
   if (account.role === 'admin') {
     actions.push({ number: '05', label: '账号与权限', description: '管理账号、权限与部门', route: '/admin/users', icon: ShieldCheck });
   }
   if (account.role === 'reviewer' || account.role === 'admin') {
-    actions.push({ number: '06', label: '员工管理', description: '查看工资汇总与员工档案', route: '/staff/employees', icon: UsersRound });
+    actions.push({ number: '06', label: '员工管理', description: '查看员工资料与申报记录', route: '/staff/employees', icon: UsersRound });
     actions.push({ number: '07', label: '总审计', description: '查看月度与年度统计', route: '/audit/overview', icon: ChartNoAxesCombined });
   }
 
@@ -539,6 +596,18 @@ function LandingPage({ account, onNavigate }: { account: StoredAccount; onNaviga
 
 function navigate(route: AppRoute) {
   window.location.hash = route;
+}
+
+function isPayrollRoute(route: AppRoute) {
+  return route === '/pay/salary' || route === '/pay/salary/single' || route === '/pay/salary/batch';
+}
+
+function isDelegatedPayrollRoute(route: AppRoute) {
+  return route === '/pay/salary/single' || route === '/pay/salary/batch';
+}
+
+function isReviewRoute(route: AppRoute) {
+  return route === '/review/salary' || route === '/review/summary';
 }
 
 function readRoute(): AppRoute {

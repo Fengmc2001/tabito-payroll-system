@@ -6,8 +6,11 @@ export type AppRoute =
   | '/profile/first-setting'
   | '/profile/setting'
   | '/pay/salary'
+  | '/pay/salary/single'
+  | '/pay/salary/batch'
   | '/pay/history'
   | '/review/salary'
+  | '/review/summary'
   | '/admin/users'
   | '/staff/employees'
   | '/audit/overview';

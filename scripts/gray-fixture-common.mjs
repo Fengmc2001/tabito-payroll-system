@@ -66,6 +66,80 @@ export const accountSpecs = [
   })),
 ];
 
+// Repository-owned gray fixture definition. Passwords are intentionally absent:
+// they are generated per environment and written only to the ignored credential file.
+export const grayAdminSalarySpec = Object.freeze({
+  key: 'lingling',
+  slug: 'lingling-commission',
+  currency: 'JPY',
+  total: 42_000,
+  label: '当月招生与业务佣金（固定金额）',
+  decision: 'approve',
+  applyType: 7,
+});
+
+export const grayStaffSalarySpecs = Object.freeze([
+  {
+    key: 'aiwei', slug: 'aiwei-teaching', currency: 'JPY', total: 36_000,
+    label: '授课与备课', decision: 'approve', applyType: 1,
+    hourlyRate: 18_000, startTime: '09:00', endTime: '11:00',
+  },
+  {
+    key: 'aiwei', slug: 'aiwei-management', currency: 'JPY', total: 24_000,
+    label: '教学管理', decision: 'pending', applyType: 6,
+  },
+  {
+    key: 'up', slug: 'up-management', currency: 'JPY', total: 36_000,
+    label: '运营管理', decision: 'approve', applyType: 6,
+  },
+  {
+    key: 'awen', slug: 'awen-management', currency: 'JPY', total: 40_000,
+    label: '事务管理', decision: 'pending', applyType: 6,
+  },
+  {
+    key: 'john', slug: 'john-management', currency: 'JPY', total: 32_000,
+    label: '项目管理', decision: 'approve', applyType: 6,
+  },
+]);
+
+export const grayTeacherSalarySpecs = Object.freeze([
+  { key: 'teacher-a', currency: 'JPY', total: 24_000, unit: 6_000, decision: 'approve', applyType: 1 },
+  { key: 'teacher-b', currency: 'JPY', total: 33_600, unit: 8_400, decision: 'pending', applyType: 1 },
+  { key: 'teacher-c', currency: 'JPY', total: 25_600, unit: 6_400, decision: 'reject', applyType: 1 },
+  { key: 'teacher-d', currency: 'JPY', total: 24_000, unit: 6_000, decision: 'approve', applyType: 1 },
+  { key: 'teacher-e', currency: 'JPY', total: 24_000, unit: 6_000, decision: 'pending', applyType: 1 },
+  { key: 'teacher-f', currency: 'CNY', total: 1_440, unit: 360, decision: 'approve', applyType: 1 },
+  { key: 'teacher-g', currency: 'CNY', total: 3_200, unit: 800, decision: 'reject', applyType: 1 },
+].map((spec) => ({ ...spec, label: '固定授课' })));
+
+export const grayDelegatedSalarySpec = Object.freeze({
+  key: 'teacher-d',
+  slug: 'teacher-d-cny',
+  currency: 'CNY',
+  total: 1_600,
+  label: '中国区教学资料支援（固定金额）',
+  decision: 'pending',
+  applyType: 7,
+});
+
+// Fixture-only plausibility check. This fixed conversion is not a business
+// exchange rate and is never used by application totals or approval logic.
+export const GRAY_FIXTURE_CNY_TO_JPY = 20;
+export const GRAY_MONTHLY_LIMIT_JPY_EQUIVALENT = 100_000;
+
+export const grayExpectedSalarySpecs = Object.freeze([
+  { ...grayAdminSalarySpec, count: 1, status: statusForDecision(grayAdminSalarySpec.decision) },
+  ...grayStaffSalarySpecs.map((spec) => ({ ...spec, count: 1, status: statusForDecision(spec.decision) })),
+  ...grayTeacherSalarySpecs.map((spec) => ({
+    ...spec,
+    slug: `${spec.key}-${spec.currency.toLowerCase()}`,
+    hourlyRate: spec.unit / 2,
+    count: 4,
+    status: statusForDecision(spec.decision),
+  })),
+  { ...grayDelegatedSalarySpec, count: 1, status: statusForDecision(grayDelegatedSalarySpec.decision) },
+]);
+
 export function grayBaseUrl() {
   const value = String(process.env.PAYROLL_GRAY_BASE_URL || 'http://localhost:3200').replace(/\/+$/, '');
   const parsed = new URL(value);
@@ -232,6 +306,13 @@ export function assertMonth(month) {
 
 export function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+export function statusForDecision(decision) {
+  if (decision === 'approve') return 3;
+  if (decision === 'reject') return 4;
+  if (decision === 'pending') return 2;
+  throw new Error(`未知灰度审核状态：${decision}`);
 }
 
 export function assertGrayMaintenancePreflight(data) {

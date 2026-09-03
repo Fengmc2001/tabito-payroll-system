@@ -17,10 +17,12 @@
 - 动态部门：管理员可新增/删除选项。删除为软停用，历史申报保留提交时的部门名称快照。
 - 按月审批：待审、通过、驳回同时保留在工作月份内，审批后不会从当月列表消失。
 - 工资代报：审核员和管理员可为员工新建单条申报，或按日期范围批量生成固定排班；一次最多生成 62 条，提交失败时不会留下半批数据。同一批次使用 `requestId` 保证安全重试，不会重复创建。
+- 左侧申报导航：审核员和管理员可直接从“工资申报”下进入“本人申报 / 他人单条申报 / 他人多条申报”；普通员工只显示本人可用的工资申报入口。
 - 定期申报：批量排班可保存为按月规则，支持暂停、恢复、删除和手动生成。Cloudflare 定时任务会分页处理到期规则，同一规则同一月份只生成一次。
 - 审批来源可追踪：本人申报、单条代报、批量代报和定期生成都会保存工资所属人、创建人、提交人、批次及规则来源。按当前运营规则，管理员和审核员可以审批本人或自己代报的记录，最终付款前仍由人工核对。
 - 并发保护：本人草稿、代报草稿、账号权限和定期规则使用版本校验；整月提交、批量代报和关键审计写入使用 D1 原子批处理，过期页面不能覆盖较新的修改。
-- `06 员工管理`：固定首项是按月份生成的“工资汇总”，可查看姓名、联系方式、收款资料、分币种已审批金额与全部 PDF，并可将纯文本字段导出为 Excel；员工详情另含全部资料、附件、历史申报、总工资、按月工资和审批/审计记录。
+- `04 工资审核`：左侧分为“工资审批”和“工资汇总”。工资汇总可按月查看姓名、联系方式、收款资料、分币种已审批金额与全部 PDF，并可将纯文本字段导出为 Excel。
+- `06 员工管理`：按账号查看员工全部资料、附件、历史申报、总工资、按月工资和审批/审计记录。
 - `07 总审计`：当月/年度已审批支出、待审/驳回、部门分解；选择员工后，月度、年度、逐月及部门汇总都会按该账号过滤，并显示该账号当月操作追踪。
 - 管理员和审核员页面均显示最近 10 条后台/业务操作，并可查看员工上传的证件、银行资料和工资附件。操作人优先显示已注册姓名，缺失时才回退到邮箱。
 - 导航、提醒、审计指标、附件和转账操作使用语义一致的 SVG 图标，减少阅读纯文本的时间；图标来自 [Lucide](https://lucide.dev/)（ISC License）。
@@ -38,22 +40,31 @@ npm run dev
 
 访问 `http://localhost:3000/#/account/login`。空库首次注册时，在页面的“首次设置密钥”中填入 `.dev.vars` 里的同一值。`npm run dev` 会在启动前自动执行本地 D1 迁移。D1 会保存为 `.local/payroll-v2/` 内的 SQLite 文件，R2 附件也在同一本地状态目录；该目录已被 Git 忽略。旧版本的 `.local/payroll-demo/` 不含迁移日志，因此会原样保留，新启动命令不会改动它。
 
-### 两个本地演示账号
+### 完整本地灰度演示（12 个账号）
 
-在一个终端启动服务，再在另一个终端执行初始化：
+灰度演示会创建泠泠、阿惟、UP、阿稳、john 和授课老师 A–G，并写入 35 条双币种工资样例。它必须使用独立的本地 D1/R2；先把 `.dev.vars` 设置为：
 
-```bash
-# 先在 .dev.vars 中设置：BOOTSTRAP_SECRET="LocalDemoBootstrap2026!"
-npm run dev:demo
-PAYROLL_BOOTSTRAP_SECRET='LocalDemoBootstrap2026!' npm run demo:seed
+```dotenv
+DEPLOYMENT_STAGE=gray
+GRAY_ENVIRONMENT_ID=tabito-payroll-isolated-gray-v1
+BOOTSTRAP_SECRET=LocalGrayBootstrap2026!
 ```
 
-| 角色 | 账号 | 本地演示密码 |
-|---|---|---|
-| 管理员 | `TabitoAdimin01@tabitoedu.com` | `TabitoAdmin2026!` |
-| 员工 | `employee@tabito.local` | `TabitoEmployee2026!` |
+在一个终端启动独立灰度服务，再在另一个终端用一行命令初始化并验证：
 
-初始化会放入两条待审记录：`JPY 8,000` 和 `CNY 5,000`，便于立即试用通过/驳回、月度留存和双币种统计。初始化后公开注册仍保持开启，管理员可随时在“账号与权限”中关闭。
+```bash
+PAYROLL_LOCAL_STATE_PATH=.local/gray-demo npm run dev -- --port 3200
+
+PAYROLL_GRAY_BASE_URL=http://localhost:3200 PAYROLL_BOOTSTRAP_SECRET='LocalGrayBootstrap2026!' npm run gray:install
+```
+
+密码会随机生成并只保存在 Git 忽略的 `0600` 本地文件中。需要登录时运行：
+
+```bash
+PAYROLL_GRAY_BASE_URL=http://localhost:3200 npm run gray:credentials
+```
+
+完整账号、金额、币种、验证和一行清除命令见 [`docs/gray-testing.md`](docs/gray-testing.md)。原来的 `npm run demo:seed` 仍保留为两账号快速烟雾测试，但不作为完整审计初始化。
 
 ## 验证
 
@@ -85,7 +96,7 @@ PAYROLL_TEST_BOOTSTRAP_SECRET='SelfCheckBootstrap2026!' \
 npm run self-check:proxy
 ```
 
-2026-09-03 的完整回归结果：纯逻辑 27 个断言、代报界面 5 个断言、后端账号/权限/业务 408 个断言、代报/批量/定期规则 226 个断言，全部通过。回归还覆盖一次 62 条批量代报及重放、21 条同月草稿原子提交、旧密码登录与管理员改密竞态、改密会话轮换，以及从空库依次执行 `0000`–`0006` 迁移。独立灰度库另外完成两次幂等初始化、141 项校验和安全清除。详细权限矩阵见 [`docs/backend-self-check.md`](docs/backend-self-check.md)，浏览器与鲁棒性检查见 [`docs/robustness-test-report.md`](docs/robustness-test-report.md)。
+2026-09-04 的完整回归结果：纯逻辑 27 个断言、代报与导航界面 12 个断言、后端账号/权限/业务 408 个断言、代报/批量/定期规则 226 个断言，全部通过。回归还覆盖一次 62 条批量代报及重放、21 条同月草稿原子提交、旧密码登录与管理员改密竞态、改密会话轮换，以及从空库依次执行 `0000`–`0006` 迁移。独立灰度库另外完成重复幂等初始化、205 项校验和安全清除。详细权限矩阵见 [`docs/backend-self-check.md`](docs/backend-self-check.md)，浏览器与鲁棒性检查见 [`docs/robustness-test-report.md`](docs/robustness-test-report.md)。
 
 ## 部署
 
@@ -93,7 +104,7 @@ npm run self-check:proxy
 
 按 [`docs/server-deployment.md`](docs/server-deployment.md) 操作：创建 D1/R2、填入 D1 ID、执行迁移、部署 Worker、用 `wrangler secret put` 配置首次初始化密钥、绑定域名，然后使用固定首个管理员账号进行初始化。
 
-需要在独立 D1/R2 中试用 12 个管理员、审核员和员工账号时，使用 [`docs/gray-testing.md`](docs/gray-testing.md) 中的显式灰度初始化、验证和清除流程。生产环境不会自动写入测试数据。
+需要在独立 D1/R2 中试用 12 个管理员、审核员和员工账号时，按 [`docs/gray-testing.md`](docs/gray-testing.md) 使用 `gray:install` 一行初始化并验证，用 `gray:retire` 一行清除并恢复正式空库。测试密码只写入本地忽略文件；生产环境不会自动写入测试数据。
 
 ### 为什么不使用 GitHub Pages
 
@@ -115,7 +126,7 @@ GitHub Pages 只能托管静态文件，无法运行本项目的登录 API、`Ht
 - `app/api/`：账号、工资、代报批次、定期规则、附件、审批、部门、员工和审计 API。
 - `app/lib/server/payroll-store.ts`：D1/R2 持久化、权限、状态机、快照和审计的服务端权威实现。
 - `db/schema.ts` 与 `drizzle/`：可检查的 SQLite/D1 schema 与迁移。
-- `scripts/`：两账号演示数据、隔离灰度数据、逻辑/界面/后端/代报回归脚本。
+- `scripts/`：隔离灰度初始化与清除、两账号烟雾数据、逻辑/界面/后端/代报回归脚本。
 - `.github/workflows/ci.yml`：每次 push/PR 自动执行 lint、TypeScript、生产依赖审计、纯逻辑、代报界面、生产构建、两组后端回归和定时任务冒烟测试。
 
 ## 与参考站的关系
