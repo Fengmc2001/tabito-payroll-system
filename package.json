@@ -6,16 +6,22 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "dev": "vinext dev",
-    "dev:demo": "vinext dev --port 3100",
+    "dev": "npm run db:migrate:local && vinext dev",
+    "dev:demo": "npm run db:migrate:local && vinext dev --port 3100",
     "build": "vinext build",
     "start": "vinext start",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
+    "db:migrate:local": "node scripts/prepare-local-db.mjs",
     "db:migrate:remote": "wrangler d1 migrations apply tabito-payroll-db --remote --config wrangler.jsonc",
     "deploy:cloudflare": "npm run build && wrangler deploy --config dist/server/wrangler.json",
     "demo:seed": "node scripts/create-local-demo.mjs",
+    "gray:seed": "node scripts/seed-gray-fixture.mjs",
+    "gray:verify": "node scripts/verify-gray-fixture.mjs",
+    "gray:clear": "node scripts/clear-gray-fixture.mjs",
     "self-check:backend": "node scripts/backend-self-check.mjs",
+    "self-check:delegated-ui": "node scripts/delegated-workspace-self-check.mjs",
+    "self-check:proxy": "node scripts/proxy-payroll-self-check.mjs",
     "self-check:logic": "node scripts/payroll-logic-self-check.mjs"
   },
   "dependencies": {

@@ -71,7 +71,7 @@ export function FileNameInput({
   value,
   onChange,
   maximum,
-  accept = 'image/*,.pdf',
+  accept = '.jpg,.jpeg,.png,.webp,.pdf',
   onUpload,
 }: {
   value: string[];

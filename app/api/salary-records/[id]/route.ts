@@ -28,7 +28,8 @@ export async function DELETE(request: Request, context: RouteContext) {
   try {
     const actor = await requireSession(request);
     const { id } = await context.params;
-    await deleteSalaryRecord(actor.userId, id);
+    const expectedUpdatedAt = new URL(request.url).searchParams.get('updatedAt') ?? undefined;
+    await deleteSalaryRecord(actor.userId, id, expectedUpdatedAt);
     return json({ ok: true });
   } catch (error) {
     return errorResponse(error);

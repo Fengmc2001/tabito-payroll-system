@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 const baseUrl = process.env.PAYROLL_DEMO_BASE_URL || 'http://localhost:3100';
+const bootstrapSecret = process.env.PAYROLL_BOOTSTRAP_SECRET || 'LocalDemoBootstrap2026!';
 const adminCredentials = {
   email: process.env.PAYROLL_DEMO_ADMIN_EMAIL || 'TabitoAdimin01@tabitoedu.com',
   password: process.env.PAYROLL_DEMO_ADMIN_PASSWORD || 'TabitoAdmin2026!',
@@ -9,6 +10,13 @@ const employeeCredentials = {
   email: process.env.PAYROLL_DEMO_EMPLOYEE_EMAIL || 'employee@tabito.local',
   password: process.env.PAYROLL_DEMO_EMPLOYEE_PASSWORD || 'TabitoEmployee2026!',
 };
+
+const demoUrl = new URL(baseUrl);
+if (!['localhost', '127.0.0.1', '::1'].includes(demoUrl.hostname)
+  && process.env.PAYROLL_ALLOW_REMOTE_DEMO !== '1') {
+  throw new Error('Local demo initialization only runs on localhost. Set PAYROLL_ALLOW_REMOTE_DEMO=1 only for a disposable isolated remote demo.');
+}
+
 const demoRecords = [
   { marker: '[LOCAL-DEMO-SEED-JPY]', currency: 'JPY', amount: 8000, label: '日元教学资料整理' },
   { marker: '[LOCAL-DEMO-SEED-CNY]', currency: 'CNY', amount: 5000, label: '人民币事务支援' },
@@ -40,9 +48,7 @@ try {
     bankAccountHolder: 'TABITO ADMIN',
     bankAccountNumber: '0000001',
   });
-  await expect(`/api/admin/users/${adminSession.account.id}`, 200, {
-    method: 'PATCH', cookie: adminCookie, body: { workManager: true },
-  });
+  await patchManagedUser(adminSession.account.id, { workManager: true });
 
   let employeeSession = await loginOrRegister(employeeCredentials);
   employeeSession = await saveBasicProfile(employeeSession, {
@@ -52,11 +58,7 @@ try {
     tel: '手机：090-0000-0000\n微信：tabito-demo\n紧急联系人：测试家属 080-0000-0000',
   });
 
-  const roleResponse = await expect(`/api/admin/users/${employeeSession.account.id}`, 200, {
-    method: 'PATCH',
-    cookie: adminCookie,
-    body: { role: 'employee', status: 'active' },
-  });
+  const roleResponse = await patchManagedUser(employeeSession.account.id, { role: 'employee', status: 'active' });
   assert(roleResponse.data.user.role === 'employee', '员工角色写入失败。');
 
   employeeSession = await completePayrollProfile(employeeSession, {
@@ -195,7 +197,7 @@ async function loginOrRegister(credentials) {
 
   const registration = await request('/api/users', {
     method: 'POST',
-    body: { email: credentials.email, passwordDigest: digest(credentials.password) },
+    body: { email: credentials.email, passwordDigest: digest(credentials.password), bootstrapSecret },
   });
   if (registration.status !== 201) {
     throw new Error(`创建 ${credentials.email} 失败：HTTP ${registration.status} ${JSON.stringify(registration.data)}`);
@@ -228,6 +230,17 @@ async function expect(path, status, options = {}) {
     throw new Error(`${options.method || 'GET'} ${path}: expected ${status}, received ${response.status} ${JSON.stringify(response.data)}`);
   }
   return response;
+}
+
+async function patchManagedUser(userId, body) {
+  const listing = await expect('/api/admin/users', 200, { cookie: adminCookie });
+  const target = listing.data.users.find((candidate) => candidate.id === userId);
+  if (!target) throw new Error(`未找到账号 ${userId}。`);
+  return expect(`/api/admin/users/${userId}`, 200, {
+    method: 'PATCH',
+    cookie: adminCookie,
+    body: { ...body, expectedUpdatedAt: target.updatedAt },
+  });
 }
 
 async function request(path, options = {}) {

@@ -1,9 +1,11 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "tabito-payroll-system",
-  "main": "vinext/server/app-router-entry",
+  "main": "./worker.ts",
   "compatibility_date": "2026-05-15",
   "compatibility_flags": ["nodejs_compat"],
+  // BOOTSTRAP_SECRET is intentionally absent here. Configure it as an
+  // encrypted Worker secret with: npx wrangler secret put BOOTSTRAP_SECRET
   "d1_databases": [
     {
       "binding": "DB",
@@ -18,5 +20,8 @@
       "bucket_name": "tabito-payroll-files"
     }
   ],
+  "triggers": {
+    "crons": ["5 15 * * *", "20 15 * * *", "35 15 * * *", "50 15 * * *"]
+  },
   "observability": { "enabled": true }
 }

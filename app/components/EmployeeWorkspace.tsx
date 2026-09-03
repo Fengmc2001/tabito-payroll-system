@@ -177,7 +177,7 @@ export function EmployeeWorkspace() {
 
             <section className="detail-section"><h3>月度工资</h3>{detail.monthlySummaries.length === 0 ? <div className="empty-state">暂无工资记录。</div> : <div className="data-table-wrap"><table className="data-table"><thead><tr><th>月份</th><th>记录</th><th>已申报</th><th>待审</th><th className="table-priority">已通过</th><th>已驳回</th></tr></thead><tbody>{detail.monthlySummaries.map((summary) => <tr key={summary.month}><td>{summary.month}</td><td>{summary.recordCount}</td><td><CurrencyAmountsView amounts={summary.submittedAmounts} /></td><td><CurrencyAmountsView amounts={summary.pendingAmounts} /></td><td className="table-priority"><CurrencyAmountsView amounts={summary.approvedAmounts} /></td><td><CurrencyAmountsView amounts={summary.rejectedAmounts} /></td></tr>)}</tbody></table></div>}</section>
 
-            <section className="detail-section"><h3>{month} 申报记录</h3>{monthRecords.length === 0 ? <div className="empty-state">该月份没有申报记录。</div> : <div className="employee-record-list">{monthRecords.map((record) => <article key={record.id}><header><strong>{record.workDate} · {getDepartmentLabel(record.departmentKey, record.departmentLabel)}</strong><span className={`status-badge status-badge--${STATUS[record.status].tone}`}>{STATUS[record.status].label}</span></header><p>{getApplyTypeLabel(record.applyType)} · 负责人 {record.checkUser} · <Money amount={record.finalSalary} currency={record.currency} /></p>{record.workContent && <p><b>工作内容：</b>{record.workContent}</p>}{record.memo && <p><b>员工备注：</b>{record.memo}</p>}{record.auditMemo && <p><b>审核备注：</b>{record.auditMemo}</p>}{record.attachments.length > 0 && <div className="attachment-links">{record.attachments.map((key, index) => <a key={key} href={`/api/files?key=${encodeURIComponent(key)}`} target="_blank" rel="noreferrer">申报附件 {index + 1}</a>)}</div>}</article>)}</div>}</section>
+            <section className="detail-section"><h3>{month} 申报记录</h3>{monthRecords.length === 0 ? <div className="empty-state">该月份没有申报记录。</div> : <div className="employee-record-list">{monthRecords.map((record) => <article key={record.id}><header><strong>{record.workDate} · {getDepartmentLabel(record.departmentKey, record.departmentLabel)}</strong><span className={`status-badge status-badge--${STATUS[record.status].tone}`}>{STATUS[record.status].label}</span></header><p>{getApplyTypeLabel(record.applyType)} · 负责人 {record.checkUser} · <Money amount={record.finalSalary} currency={record.currency} /></p><p className="record-provenance">{salarySourceLabel(record.source)}{record.createdByName ? ` · ${record.createdByName}` : ''}</p>{record.workContent && <p><b>工作内容：</b>{record.workContent}</p>}{record.memo && <p><b>员工备注：</b>{record.memo}</p>}{record.auditMemo && <p><b>审核备注：</b>{record.auditMemo}</p>}{record.attachments.length > 0 && <div className="attachment-links">{record.attachments.map((key, index) => <a key={key} href={`/api/files?key=${encodeURIComponent(key)}`} target="_blank" rel="noreferrer">申报附件 {index + 1}</a>)}</div>}</article>)}</div>}</section>
 
             <AuditTrailPanel logs={monthAudit} title={`${detail.user.displayName} · ${month} 操作记录`} />
           </>}
@@ -324,6 +324,16 @@ function duplicateNames(users: Array<{ id: string; displayName: string }>) {
   const counts = new Map<string, number>();
   for (const user of users) counts.set(user.displayName, (counts.get(user.displayName) ?? 0) + 1);
   return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
+}
+
+function salarySourceLabel(source: EmployeeDetail['salaryRecords'][number]['source']) {
+  return ({
+    self: '本人申报',
+    'proxy-single': '他人单条代报',
+    'proxy-batch': '他人批量代报',
+    recurring: '自动规律',
+    'gray-seed': '测试数据',
+  })[source] ?? '本人申报';
 }
 
 function errorText(error: unknown) {

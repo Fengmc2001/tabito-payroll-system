@@ -18,6 +18,8 @@ export type AccountRole = 'employee' | 'reviewer' | 'admin';
 export type AccountStatus = 'active' | 'disabled';
 export type CurrencyCode = 'JPY' | 'CNY';
 export type CurrencyAmounts = Record<CurrencyCode, number>;
+export type SalaryRecordSource = 'self' | 'proxy-single' | 'proxy-batch' | 'recurring' | 'gray-seed';
+export type PayrollBatchMode = 'fixed' | 'calendar';
 
 export type Profile = {
   firstNameCn: string;
@@ -82,6 +84,13 @@ export type SalaryRecord = {
   status: SalaryStatus;
   checkDate: string | null;
   auditMemo: string;
+  createdByUserId: string;
+  createdByName: string;
+  submittedByUserId: string;
+  submittedByName: string;
+  source: SalaryRecordSource;
+  batchId: string | null;
+  recurringRuleId: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -105,9 +114,74 @@ export type ManagedUser = {
   role: AccountRole;
   status: AccountStatus;
   workManager: boolean;
+  profileReady: boolean;
   createdAt: string;
   updatedAt: string;
   lastLoginAt: string | null;
+};
+
+export type ManagedUserUpdateInput = {
+  role?: AccountRole;
+  status?: AccountStatus;
+  workManager?: boolean;
+  revokeSessions?: boolean;
+  expectedUpdatedAt: string;
+};
+
+export type PayrollScheduleSession = {
+  workDate: string;
+  startTime: string;
+  endTime: string;
+  restHours: number;
+};
+
+export type FixedPayrollSchedule = {
+  rangeStart: string;
+  rangeEnd: string;
+  startsAtMonthStart?: boolean;
+  endsAtMonthEnd?: boolean;
+  weekdays: number[];
+  startTime: string;
+  endTime: string;
+  restHours: number;
+};
+
+export type ProxyPayrollBatchInput = {
+  requestId: string;
+  targetUserId: string;
+  month: string;
+  mode: PayrollBatchMode;
+  submit: boolean;
+  template: SalaryRecord;
+  fixedSchedule?: FixedPayrollSchedule;
+  calendarSessions?: PayrollScheduleSession[];
+  recurring?: {
+    enabled: boolean;
+    title: string;
+    startMonth: string;
+    endMonth: string;
+  };
+};
+
+export type RecurringPayrollRule = {
+  id: string;
+  userId: string;
+  userDisplayName: string;
+  userEmail: string;
+  title: string;
+  active: boolean;
+  submit: boolean;
+  startMonth: string;
+  endMonth: string;
+  template: SalaryRecord;
+  schedule: FixedPayrollSchedule;
+  createdByUserId: string;
+  createdByName: string;
+  lastRunAt: string | null;
+  lastRunStatus: 'success' | 'error' | null;
+  lastRunMessage: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type ReviewSalaryItem = {
@@ -362,6 +436,13 @@ export function createRecord(userId: string): SalaryRecord {
     status: 1,
     checkDate: null,
     auditMemo: '',
+    createdByUserId: userId,
+    createdByName: '',
+    submittedByUserId: '',
+    submittedByName: '',
+    source: 'self',
+    batchId: null,
+    recurringRuleId: null,
     createdAt: timestamp,
     updatedAt: timestamp,
   };
@@ -512,9 +593,66 @@ export function cloneAsDraft(record: SalaryRecord, userId: string) {
     status: 1,
     checkDate: null,
     auditMemo: '',
+    createdByUserId: userId,
+    createdByName: '',
+    submittedByUserId: '',
+    submittedByName: '',
+    source: 'self',
+    batchId: null,
+    recurringRuleId: null,
     createdAt: timestamp,
     updatedAt: timestamp,
   });
+}
+
+export function monthIsValid(value: string) {
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(value);
+}
+
+export function mutationRequestIsSameOrigin(
+  method: string,
+  requestOrigin: string | null,
+  targetOrigin: string,
+  fetchSite: string | null,
+) {
+  const normalizedMethod = method.toUpperCase();
+  if (normalizedMethod === 'GET' || normalizedMethod === 'HEAD' || normalizedMethod === 'OPTIONS') return true;
+  if (requestOrigin && requestOrigin !== targetOrigin) return false;
+  const normalizedFetchSite = fetchSite?.toLowerCase();
+  return normalizedFetchSite !== 'cross-site' && normalizedFetchSite !== 'same-site';
+}
+
+export function monthDateRange(month: string) {
+  if (!monthIsValid(month)) return null;
+  const [year, monthNumber] = month.split('-').map(Number);
+  const lastDay = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+  return {
+    start: `${month}-01`,
+    end: `${month}-${String(lastDay).padStart(2, '0')}`,
+    lastDay,
+  };
+}
+
+export function expandFixedPayrollSchedule(month: string, schedule: FixedPayrollSchedule): PayrollScheduleSession[] {
+  const range = monthDateRange(month);
+  if (!range || !dateIsValid(schedule.rangeStart) || !dateIsValid(schedule.rangeEnd)) return [];
+  if (!schedule.rangeStart.startsWith(month) || !schedule.rangeEnd.startsWith(month) || schedule.rangeStart > schedule.rangeEnd) return [];
+  const weekdays = new Set(schedule.weekdays.filter((day) => Number.isInteger(day) && day >= 0 && day <= 6));
+  if (weekdays.size === 0) return [];
+  const sessions: PayrollScheduleSession[] = [];
+  for (let day = Number(schedule.rangeStart.slice(8, 10)); day <= Number(schedule.rangeEnd.slice(8, 10)); day += 1) {
+    const workDate = `${month}-${String(day).padStart(2, '0')}`;
+    if (!dateIsValid(workDate)) continue;
+    const [year, monthNumber] = month.split('-').map(Number);
+    if (!weekdays.has(new Date(Date.UTC(year, monthNumber - 1, day)).getUTCDay())) continue;
+    sessions.push({
+      workDate,
+      startTime: schedule.startTime,
+      endTime: schedule.endTime,
+      restHours: schedule.restHours,
+    });
+  }
+  return sessions;
 }
 
 export function makeId(prefix: string) {

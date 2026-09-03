@@ -1,7 +1,8 @@
-import { errorResponse, json, loginUser, sessionCookie } from '../../../lib/server/payroll-store';
+import { errorResponse, json, loginUser, requireSameOriginMutation, sessionCookie } from '../../../lib/server/payroll-store';
 
 export async function POST(request: Request) {
   try {
+    requireSameOriginMutation(request);
     const body = await request.json() as { email?: string; passwordDigest?: string };
     const result = await loginUser(body.email ?? '', body.passwordDigest ?? '');
     return json(

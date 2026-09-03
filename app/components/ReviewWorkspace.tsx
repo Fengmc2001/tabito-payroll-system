@@ -167,6 +167,9 @@ export function ReviewWorkspace() {
                   <div><dt>负责人</dt><dd>{record.checkUser}</dd></div>
                   <div><dt>所属部门</dt><dd>{getDepartmentLabel(record.departmentKey, record.departmentLabel)}</dd></div>
                   <div><dt>计费方式</dt><dd>{getApplyTypeLabel(record.applyType)}</dd></div>
+                  <div><dt>申报来源</dt><dd>{salarySourceLabel(record.source)}</dd></div>
+                  <div><dt>创建人</dt><dd>{record.createdByName || item.user.displayName}</dd></div>
+                  <div><dt>提交人</dt><dd>{record.submittedByName || item.user.displayName}</dd></div>
                   <div><dt>劳动 / 休息</dt><dd>{formatHours(record.workHours)} / {formatHours(record.restHours)} 小时</dd></div>
                   <div><dt>工资金额</dt><dd className="review-card__amount"><Money amount={record.finalSalary} currency={record.currency} /></dd></div>
                 </dl>
@@ -209,4 +212,14 @@ function summarize(items: ReviewSalaryItem[], status: SalaryStatus) {
 
 function errorText(error: unknown) {
   return error instanceof ApiClientError ? error.message : error instanceof Error ? error.message : '请求失败。';
+}
+
+function salarySourceLabel(source: ReviewSalaryItem['record']['source']) {
+  return ({
+    self: '本人申报',
+    'proxy-single': '他人单条代报',
+    'proxy-batch': '他人批量代报',
+    recurring: '自动规律',
+    'gray-seed': '测试数据',
+  })[source] ?? '本人申报';
 }

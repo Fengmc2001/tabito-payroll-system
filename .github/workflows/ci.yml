@@ -20,4 +20,43 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npx tsc --noEmit
+      - run: npm run self-check:logic
+      - run: npm run self-check:delegated-ui
+      - run: npm audit --omit=dev
+      - name: Prepare disposable local D1
+        env:
+          PAYROLL_LOCAL_STATE_PATH: .local/ci-audit
+        run: npm run db:migrate:local
       - run: npm run build
+      - name: Backend and role regression
+        shell: bash
+        # This fixed value protects only the disposable CI database. Production
+        # BOOTSTRAP_SECRET is an encrypted Worker secret and is never stored here.
+        env:
+          BOOTSTRAP_SECRET: CI-Only-Bootstrap-2026!
+          PAYROLL_TEST_BOOTSTRAP_SECRET: CI-Only-Bootstrap-2026!
+        run: |
+          set -euo pipefail
+          npx wrangler dev \
+            --config dist/server/wrangler.json \
+            --port 3200 \
+            --persist-to .local/ci-audit \
+            --var "BOOTSTRAP_SECRET:$BOOTSTRAP_SECRET" \
+            > /tmp/tabito-ci-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for _ in {1..60}; do
+            if curl --fail --silent http://localhost:3200/api/bootstrap-status > /dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            sed -n '1,240p' /tmp/tabito-ci-server.log
+            exit 1
+          fi
+          PAYROLL_TEST_BASE_URL=http://localhost:3200 PAYROLL_TEST_ADMIN_PASSWORD='CI-Only-Admin-2026!' npm run self-check:backend
+          PAYROLL_TEST_BASE_URL=http://localhost:3200 PAYROLL_TEST_ADMIN_PASSWORD='CI-Only-Admin-2026!' npm run self-check:proxy
+          curl --fail --silent --show-error http://localhost:3200/cdn-cgi/local/scheduled > /dev/null

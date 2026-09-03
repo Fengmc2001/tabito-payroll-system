@@ -81,7 +81,12 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
     try {
       const result = await apiRequest<{ user: ManagedUser }>(`/api/admin/users/${user.id}`, {
         method: 'PATCH',
-        body: { role: user.role, status: user.status, workManager: user.workManager },
+        body: {
+          role: user.role,
+          status: user.status,
+          workManager: user.workManager,
+          expectedUpdatedAt: user.updatedAt,
+        },
       });
       setUsers((current) => current.map((candidate) => candidate.id === user.id ? result.user : candidate));
       setTone('success');
@@ -99,7 +104,11 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
   const revokeSessions = async (user: ManagedUser) => {
     setBusyId(user.id);
     try {
-      await apiRequest(`/api/admin/users/${user.id}`, { method: 'PATCH', body: { revokeSessions: true } });
+      const result = await apiRequest<{ user: ManagedUser }>(`/api/admin/users/${user.id}`, {
+        method: 'PATCH',
+        body: { revokeSessions: true, expectedUpdatedAt: user.updatedAt },
+      });
+      setUsers((current) => current.map((candidate) => candidate.id === user.id ? result.user : candidate));
       setTone('success');
       setMessage(`已撤销 ${user.displayName} 的全部登录会话。`);
       void refreshLogs(setLogs);
@@ -260,7 +269,7 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
             setResetTarget(null);
             setTone('success');
             setMessage(text);
-            void refreshLogs(setLogs);
+            void load();
           }}
         />
       )}
@@ -282,7 +291,7 @@ function PasswordResetDialog({ user, onClose, onSuccess }: { user: ManagedUser; 
     try {
       await apiRequest(`/api/admin/users/${user.id}/password`, {
         method: 'POST',
-        body: { newPasswordDigest: await digestPassword(password) },
+        body: { newPasswordDigest: await digestPassword(password), expectedUpdatedAt: user.updatedAt },
       });
       onSuccess(`已为 ${user.displayName} 重置密码，并撤销该账号的全部会话。`);
     } catch (error) {

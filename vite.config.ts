@@ -3,7 +3,7 @@ import tailwindcss from '@tailwindcss/postcss';
 import vinext from 'vinext';
 import { defineConfig } from 'vite';
 
-const LOCAL_DEMO_STATE_PATH = '.local/payroll-demo';
+const LOCAL_DEMO_STATE_PATH = '.local/payroll-v2';
 
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === 'seatbelt';

@@ -19,19 +19,20 @@ import {
   formatHours,
   getApplyTypeLabel,
   getDepartmentLabel,
+  monthDateRange,
   nextPaymentDate,
   recalculateRecord,
   SalaryApplyType,
 } from '../lib/payroll';
 import { CurrencyAmountsView, Money } from './payroll-ui';
 
-const TIME_OPTIONS = Array.from({ length: 289 }, (_, index) => {
+export const TIME_OPTIONS = Array.from({ length: 289 }, (_, index) => {
   const hours = Math.floor(index / 12);
   const minutes = (index % 12) * 5;
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 });
 
-const REST_OPTIONS = Array.from({ length: 289 }, (_, index) => {
+export const REST_OPTIONS = Array.from({ length: 289 }, (_, index) => {
   const hours = Math.floor(index / 12);
   const minutes = (index % 12) * 5;
   return { value: Number((index / 12).toFixed(2)), label: `${hours} 小时 ${String(minutes).padStart(2, '0')} 分钟` };
@@ -45,6 +46,7 @@ export function SalaryWorkspace({
   onApply,
   onRefresh,
   onUpload,
+  embedded = false,
 }: {
   userId: string;
   records: SalaryRecord[];
@@ -53,6 +55,7 @@ export function SalaryWorkspace({
   onApply: (month: string) => Promise<number>;
   onRefresh: () => Promise<void>;
   onUpload?: (file: File) => Promise<string>;
+  embedded?: boolean;
 }) {
   const naturalMonth = currentMonth();
   const [month, setMonth] = useState(naturalMonth);
@@ -157,8 +160,8 @@ export function SalaryWorkspace({
     <section className="content-card salary-workspace">
       <div className="content-card__heading salary-workspace__heading">
         <div>
-          <p className="eyebrow">02 工资申报</p>
-          <h1>本期工资申报</h1>
+          {!embedded && <p className="eyebrow">02 工资申报</p>}
+          {embedded ? <h2 className="workspace-panel-title">本人申报</h2> : <h1>本期工资申报</h1>}
         </div>
         <div className="heading-actions">
           <label className="month-picker"><span>申报月份</span><input type="month" value={month} onChange={(event) => setMonth(event.target.value || naturalMonth)} /></label>
@@ -265,7 +268,7 @@ export function SalaryHistory({ records }: { records: SalaryRecord[] }) {
   );
 }
 
-function SummaryCard({
+export function SummaryCard({
   label,
   value,
   tone,
@@ -282,22 +285,26 @@ function SummaryCard({
   );
 }
 
-function SalaryTable({
+export function SalaryTable({
   records,
   onEdit,
   onCopy,
   onDelete,
+  readOnly = false,
   emptyMessage = '尚未创建工资记录。',
 }: {
   records: SalaryRecord[];
-  onEdit: (record: SalaryRecord) => void;
-  onCopy: (record: SalaryRecord) => void;
-  onDelete: (id: string) => void;
+  onEdit?: (record: SalaryRecord) => void;
+  onCopy?: (record: SalaryRecord) => void;
+  onDelete?: (id: string) => void;
+  readOnly?: boolean;
   emptyMessage?: string;
 }) {
   if (records.length === 0) {
     return <div className="empty-state empty-state--compact">{emptyMessage}</div>;
   }
+
+  const hasActions = !readOnly && Boolean(onEdit || onCopy || onDelete);
 
   return (
     <div className="data-table-wrap">
@@ -310,7 +317,7 @@ function SalaryTable({
             <th>计费方式</th>
             <th>工作收入</th>
             <th>状态</th>
-            <th aria-label="操作" />
+            {hasActions && <th>操作</th>}
           </tr>
         </thead>
         <tbody>
@@ -327,13 +334,13 @@ function SalaryTable({
                   <span className={`status-badge status-badge--${status.tone}`}>{status.label}</span>
                   {record.auditMemo && <small className="salary-audit-note">{record.auditMemo}</small>}
                 </td>
-                <td>
+                {hasActions && <td>
                   <div className="row-actions">
-                    {record.status === 1 && <button type="button" onClick={() => onEdit(record)}>编辑</button>}
-                    <button type="button" onClick={() => onCopy(record)}>复制</button>
-                    {record.status === 1 && <button type="button" className="danger-text" onClick={() => onDelete(record.id)}>删除</button>}
+                    {record.status === 1 && onEdit && <button type="button" onClick={() => onEdit(record)}>编辑</button>}
+                    {onCopy && <button type="button" onClick={() => onCopy(record)}>复制</button>}
+                    {record.status === 1 && onDelete && <button type="button" className="danger-text" onClick={() => onDelete(record.id)}>删除</button>}
                   </div>
-                </td>
+                </td>}
               </tr>
             );
           })}
@@ -343,7 +350,7 @@ function SalaryTable({
   );
 }
 
-function SalaryStatusSection({
+export function SalaryStatusSection({
   tone,
   title,
   records,
@@ -362,29 +369,35 @@ function SalaryStatusSection({
       </div>
       <SalaryTable
         records={records}
-        onEdit={() => undefined}
         onCopy={onCopy}
-        onDelete={() => undefined}
         emptyMessage={`本月没有${title.replace(' · ', '')}记录。`}
       />
     </section>
   );
 }
 
-function SalaryRecordDialog({
+export function SalaryRecordDialog({
   initial,
   departments,
   workManagers,
   onClose,
   onSave,
   onUpload,
+  title,
+  month,
+  allowDirectSubmit = false,
+  directSubmitDisabled = false,
 }: {
   initial: SalaryRecord;
   departments: DepartmentOption[];
   workManagers: WorkManagerOption[];
   onClose: () => void;
-  onSave: (record: SalaryRecord) => void;
+  onSave: (record: SalaryRecord, submit?: boolean) => void;
   onUpload?: (file: File) => Promise<string>;
+  title?: string;
+  month?: string;
+  allowDirectSubmit?: boolean;
+  directSubmitDisabled?: boolean;
 }) {
   const [draft, setDraft] = useState(() => {
     const manager = workManagers.find((item) => item.id === initial.checkUserId || item.label === initial.checkUser);
@@ -415,7 +428,7 @@ function SalaryRecordDialog({
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const completed = recalculateRecord({ ...draft, updatedAt: new Date().toISOString() });
+    const completed = recalculateRecord(draft);
     if (!completed.workDate || !completed.checkUserId || !completed.checkUser || !completed.departmentKey) {
       setError('日期、工作负责人和工作所属部门为必填项。');
       return;
@@ -441,7 +454,8 @@ function SalaryRecordDialog({
       return;
     }
     setError('');
-    onSave(completed);
+    const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLElement | null;
+    onSave(completed, submitter?.dataset.submit === 'pending');
   };
 
   const reportInvalid = (event: FormEvent<HTMLFormElement>) => {
@@ -453,7 +467,7 @@ function SalaryRecordDialog({
       <section className="record-modal" role="dialog" aria-modal="true" aria-labelledby="record-dialog-title">
         <header className="record-modal__header">
           <div>
-            <h2 id="record-dialog-title">{initial.createdAt === initial.updatedAt ? '新建工资记录' : '编辑工资记录'}</h2>
+            <h2 id="record-dialog-title">{title ?? (initial.createdAt === initial.updatedAt ? '新建工资记录' : '编辑工资记录')}</h2>
           </div>
           <button type="button" className="icon-button" aria-label="关闭" onClick={onClose}>×</button>
         </header>
@@ -463,7 +477,14 @@ function SalaryRecordDialog({
             <FormSection title="工作信息">
               <div className="form-grid form-grid--two">
                 <Field label="日期" required>
-                  <input type="date" value={draft.workDate} onChange={(event) => update('workDate', event.target.value)} required />
+                  <input
+                    type="date"
+                    min={month ? `${month}-01` : undefined}
+                    max={month ? monthDateRange(month)?.end : undefined}
+                    value={draft.workDate}
+                    onChange={(event) => update('workDate', event.target.value)}
+                    required
+                  />
                 </Field>
                 <Field label="工作负责人" required>
                   <select value={draft.checkUserId} onChange={(event) => update('checkUserId', event.target.value)} required>
@@ -565,7 +586,10 @@ function SalaryRecordDialog({
             <StatusMessage message={error} tone="error" />
             <div>
               <button type="button" className="secondary-button" onClick={onClose}>取消</button>
-              <button type="submit" className="primary-button">保存</button>
+              {allowDirectSubmit ? <>
+                <button type="submit" className="secondary-button" data-submit="draft">保存为未提交</button>
+                <button type="submit" className="primary-button" data-submit="pending" disabled={directSubmitDisabled}>保存并提交审核</button>
+              </> : <button type="submit" className="primary-button">保存</button>}
             </div>
           </footer>
         </form>
@@ -574,7 +598,7 @@ function SalaryRecordDialog({
   );
 }
 
-function summarize(records: SalaryRecord[]) {
+export function summarize(records: SalaryRecord[]) {
   return records.reduce(
     (summary, record) => {
       summary.total[record.currency] += record.finalSalary;
@@ -594,13 +618,13 @@ function summarize(records: SalaryRecord[]) {
   );
 }
 
-function sumAmounts(records: SalaryRecord[]): CurrencyAmounts {
+export function sumAmounts(records: SalaryRecord[]): CurrencyAmounts {
   return records.reduce((totals, record) => {
     totals[record.currency] += record.finalSalary;
     return totals;
   }, emptyCurrencyAmounts());
 }
 
-function messageFrom(error: unknown) {
+export function messageFrom(error: unknown) {
   return error instanceof Error ? error.message : '操作失败，请稍后重试。';
 }

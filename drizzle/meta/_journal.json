@@ -36,6 +36,20 @@
       "when": 1788246163331,
       "tag": "0004_aberrant_mauler",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1788400727197,
+      "tag": "0005_old_inertia",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1788434378599,
+      "tag": "0006_dry_winter_soldier",
+      "breakpoints": true
     }
   ]
 }

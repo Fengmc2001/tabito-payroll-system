@@ -1,4 +1,12 @@
-import { errorResponse, getAccount, json, registerUser, requireSession, sessionCookie } from '../../lib/server/payroll-store';
+import {
+  errorResponse,
+  getAccount,
+  json,
+  registerUser,
+  requireSameOriginMutation,
+  requireSession,
+  sessionCookie,
+} from '../../lib/server/payroll-store';
 
 export async function GET(request: Request) {
   try {
@@ -11,8 +19,9 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json() as { email?: string; passwordDigest?: string };
-    const result = await registerUser(body.email ?? '', body.passwordDigest ?? '');
+    requireSameOriginMutation(request);
+    const body = await request.json() as { email?: string; passwordDigest?: string; bootstrapSecret?: string };
+    const result = await registerUser(body.email ?? '', body.passwordDigest ?? '', body.bootstrapSecret ?? '');
     return json(
       { account: result.account, session: { expiresAt: result.session.expiresAt } },
       {

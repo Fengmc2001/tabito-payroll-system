@@ -1,8 +1,7 @@
 import { index, integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
-// Runtime initialization lives in app/lib/server/payroll-store.ts so local
-// previews and deployed D1 bindings share the same schema. These definitions
-// keep the schema inspectable and ready for conventional Drizzle migrations.
+// Drizzle migrations are authoritative for local and deployed D1 databases.
+// The runtime performs only a lightweight compatibility probe and never mutates schema.
 export const payrollUsers = sqliteTable('payroll_users', {
   id: text('id').primaryKey(),
   email: text('email').notNull().unique(),
@@ -95,8 +94,63 @@ export const payrollAuditLogs = sqliteTable('payroll_audit_logs', {
   targetType: text('target_type').notNull(),
   targetId: text('target_id').notNull(),
   detailJson: text('detail_json').notNull(),
+  subjectUserId: text('subject_user_id'),
+  businessMonth: text('business_month'),
   createdAt: text('created_at').notNull(),
 }, (table) => [
   index('idx_payroll_audit_created').on(table.createdAt),
   index('idx_payroll_audit_actor').on(table.actorUserId, table.createdAt),
+  index('idx_payroll_audit_subject_month').on(table.subjectUserId, table.businessMonth, table.createdAt),
+]);
+
+export const payrollSalaryBatches = sqliteTable('payroll_salary_batches', {
+  id: text('id').primaryKey(),
+  requestId: text('request_id').notNull().unique(),
+  actorUserId: text('actor_user_id').notNull(),
+  targetUserId: text('target_user_id').notNull(),
+  payloadHash: text('payload_hash').notNull().default(''),
+  recordIdsJson: text('record_ids_json').notNull(),
+  createdAt: text('created_at').notNull(),
+}, (table) => [
+  index('idx_payroll_salary_batches_target').on(table.targetUserId, table.createdAt),
+]);
+
+export const payrollRecurringRules = sqliteTable('payroll_recurring_rules', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  title: text('title').notNull(),
+  active: integer('active', { mode: 'boolean' }).notNull().default(true),
+  submitOnGenerate: integer('submit_on_generate', { mode: 'boolean' }).notNull().default(true),
+  startMonth: text('start_month').notNull(),
+  endMonth: text('end_month').notNull().default(''),
+  templateJson: text('template_json').notNull(),
+  scheduleJson: text('schedule_json').notNull(),
+  createdByUserId: text('created_by_user_id').notNull(),
+  lastRunAt: text('last_run_at'),
+  lastRunStatus: text('last_run_status'),
+  lastRunMessage: text('last_run_message').notNull().default(''),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+  deletedAt: text('deleted_at'),
+}, (table) => [
+  index('idx_payroll_recurring_target_active').on(table.userId, table.active, table.startMonth),
+]);
+
+export const payrollRecurringInstances = sqliteTable('payroll_recurring_instances', {
+  ruleId: text('rule_id').notNull(),
+  month: text('month').notNull(),
+  recordIdsJson: text('record_ids_json').notNull(),
+  createdAt: text('created_at').notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.ruleId, table.month] }),
+]);
+
+export const payrollSeedEntities = sqliteTable('payroll_seed_entities', {
+  seedTag: text('seed_tag').notNull(),
+  entityType: text('entity_type').notNull(),
+  entityId: text('entity_id').notNull(),
+  createdAt: text('created_at').notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.seedTag, table.entityType, table.entityId] }),
+  index('idx_payroll_seed_entities_tag').on(table.seedTag, table.createdAt),
 ]);

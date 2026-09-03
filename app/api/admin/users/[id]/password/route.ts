@@ -6,8 +6,8 @@ export async function POST(request: Request, context: RouteContext) {
   try {
     const actor = await requireSession(request);
     const { id } = await context.params;
-    const body = await request.json() as { newPasswordDigest?: string };
-    await adminResetPassword(actor, id, body.newPasswordDigest ?? '');
+    const body = await request.json() as { newPasswordDigest?: string; expectedUpdatedAt?: string };
+    await adminResetPassword(actor, id, body.newPasswordDigest ?? '', body.expectedUpdatedAt ?? '');
     return json({ ok: true });
   } catch (error) {
     return errorResponse(error);

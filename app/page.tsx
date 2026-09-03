@@ -19,8 +19,9 @@ import { AdminWorkspace } from './components/AdminWorkspace';
 import { AuditWorkspace } from './components/AuditWorkspace';
 import { EmployeeWorkspace } from './components/EmployeeWorkspace';
 import { ProfileEditor } from './components/ProfileEditor';
+import { PayrollWorkspace } from './components/PayrollWorkspace';
 import { ReviewWorkspace } from './components/ReviewWorkspace';
-import { SalaryHistory, SalaryWorkspace } from './components/SalaryWorkspace';
+import { SalaryHistory } from './components/SalaryWorkspace';
 import { Field, StatusMessage, invalidFormControlMessage } from './components/form-controls';
 import { ApiClientError, apiRequest } from './lib/api-client';
 import {
@@ -141,11 +142,11 @@ export default function HomePage() {
     if (route === '/admin/users' && activeAccount.role !== 'admin') navigate('/');
   }, [activeAccount, hydrated, route]);
 
-  const register = async (email: string, password: string) => {
+  const register = async (email: string, password: string, bootstrapSecret?: string) => {
     try {
       const remote = await apiRequest<AuthResponse>('/api/users', {
         method: 'POST',
-        body: { email, passwordDigest: await digestPassword(password) },
+        body: { email, passwordDigest: await digestPassword(password), bootstrapSecret },
       });
       setActiveAccount(remote.account);
       setSystemMessage('');
@@ -171,11 +172,15 @@ export default function HomePage() {
     }
   };
 
-  const logout = () => {
-    setActiveAccount(null);
+  const logout = async () => {
     setSystemMessage('');
-    navigate('/account/login');
-    void apiRequest('/api/users/logout', { method: 'POST' }).catch(() => undefined);
+    try {
+      await apiRequest('/api/users/logout', { method: 'POST' });
+      setActiveAccount(null);
+      navigate('/account/login');
+    } catch {
+      setSystemMessage('登出失败，当前登录状态仍保留。请检查网络后重试。');
+    }
   };
 
   const saveProfile = async (profile: Profile) => {
@@ -188,7 +193,10 @@ export default function HomePage() {
       });
       setActiveAccount(account);
       setSystemMessage('');
-      if (profileIsReady(account.profile)) setProfileGateMessage('');
+      setProfileGateMessage((current) => {
+        if (!current || profileIsReady(account.profile)) return '';
+        return `工资功能尚未解锁。请先补全：${profileMissingRequirements(account.profile).join('、')}。`;
+      });
       if (route === '/profile/first-setting' && profileBasicsAreReady(account.profile)) navigate('/');
       return null;
     } catch (error) {
@@ -230,7 +238,9 @@ export default function HomePage() {
   };
 
   const deleteSalaryRecord = async (id: string) => {
-    await apiRequest(`/api/salary-records/${id}`, { method: 'DELETE' });
+    const record = activeAccount?.salaryRecords.find((item) => item.id === id);
+    if (!record) throw new Error('该记录已不在当前列表中，请刷新后重试。');
+    await apiRequest(`/api/salary-records/${id}?updatedAt=${encodeURIComponent(record.updatedAt)}`, { method: 'DELETE' });
     setActiveAccount((current) => current ? {
       ...current,
       salaryRecords: current.salaryRecords.filter((record) => record.id !== id),
@@ -287,8 +297,9 @@ export default function HomePage() {
   ) : route === '/profile/setting' ? (
     <ProfileEditor profile={activeAccount.profile} onSave={saveProfile} onResetPassword={resetPassword} onUpload={uploadFile} />
   ) : route === '/pay/salary' ? (
-    <SalaryWorkspace
-      userId={activeAccount.id}
+    <PayrollWorkspace
+      currentUserId={activeAccount.id}
+      role={activeAccount.role}
       records={activeAccount.salaryRecords}
       onSave={saveSalaryRecord}
       onDelete={deleteSalaryRecord}
@@ -327,13 +338,14 @@ function AuthPage({
 }: {
   route: AppRoute;
   onLogin: (email: string, password: string) => Promise<string | null>;
-  onRegister: (email: string, password: string) => Promise<string | null>;
+  onRegister: (email: string, password: string, bootstrapSecret?: string) => Promise<string | null>;
   initialMessage: string;
 }) {
   const mode = route === '/account/register' ? 'register' : route === '/account/forget' ? 'forget' : 'login';
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
+  const [bootstrapSecret, setBootstrapSecret] = useState('');
   const [message, setMessage] = useState(initialMessage);
   const [tone, setTone] = useState<'success' | 'error' | 'info'>(initialMessage ? 'error' : 'info');
   const [busy, setBusy] = useState(false);
@@ -371,7 +383,7 @@ function AuthPage({
       return;
     }
     setBusy(true);
-    const error = mode === 'login' ? await onLogin(email, password) : await onRegister(email, password);
+    const error = mode === 'login' ? await onLogin(email, password) : await onRegister(email, password, bootstrapSecret);
     setBusy(false);
     if (error) {
       setTone('error');
@@ -401,6 +413,7 @@ function AuthPage({
           <Field label={bootstrapRequired ? '首个管理员账号' : '邮箱'} required><input type="email" maxLength={254} value={email} readOnly={bootstrapRequired} onChange={(event) => setEmail(event.target.value)} placeholder="name@example.com" required /></Field>
           {mode !== 'forget' && <Field label="密码" required><input type="password" minLength={8} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} required /></Field>}
           {mode === 'register' && <Field label="确认密码" required><input type="password" minLength={8} maxLength={128} value={confirm} onChange={(event) => setConfirm(event.target.value)} required /></Field>}
+          {mode === 'register' && bootstrapRequired && <Field label="首次设置密钥" required><input type="password" minLength={16} maxLength={256} value={bootstrapSecret} onChange={(event) => setBootstrapSecret(event.target.value)} required /></Field>}
           <StatusMessage message={message} tone={tone} />
           <button className="primary-button primary-button--large" type="submit" disabled={busy}>
             {busy ? '处理中…' : mode === 'login' ? '登陆' : mode === 'register' ? '注册' : '查看恢复方式'}
