@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiClientError, apiRequest } from '../lib/api-client';
 import {
   AuditLogItem,
@@ -24,67 +24,87 @@ export function ReviewWorkspace() {
   const [logs, setLogs] = useState<AuditLogItem[]>([]);
   const [filter, setFilter] = useState<Filter>('all');
   const [month, setMonth] = useState(currentMonth);
+  const [selectedUserId, setSelectedUserId] = useState('');
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState('');
   const [message, setMessage] = useState('');
   const [tone, setTone] = useState<'success' | 'error' | 'info'>('info');
+  const requestRevision = useRef(0);
 
   const load = useCallback(async () => {
+    const revision = requestRevision.current + 1;
+    requestRevision.current = revision;
     setLoading(true);
     try {
       const [reviewResult, logResult] = await Promise.all([
         apiRequest<{ items: ReviewSalaryItem[] }>('/api/review/salary-records'),
         apiRequest<{ logs: AuditLogItem[] }>('/api/audit/recent'),
       ]);
-      setItems(reviewResult.items);
-      setLogs(logResult.logs);
+      if (requestRevision.current === revision) {
+        setItems(reviewResult.items);
+        setLogs(logResult.logs);
+        setSelectedUserId((current) => current && !reviewResult.items.some((item) => item.user.id === current) ? '' : current);
+        setMessage('');
+      }
     } catch (error) {
-      setTone('error');
-      setMessage(errorText(error));
+      if (requestRevision.current === revision) {
+        setTone('error');
+        setMessage(errorText(error));
+      }
     } finally {
-      setLoading(false);
+      if (requestRevision.current === revision) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
+    const revision = requestRevision.current + 1;
+    requestRevision.current = revision;
     void Promise.all([
       apiRequest<{ items: ReviewSalaryItem[] }>('/api/review/salary-records'),
       apiRequest<{ logs: AuditLogItem[] }>('/api/audit/recent'),
     ]).then(([reviewResult, logResult]) => {
-      if (!cancelled) {
+      if (requestRevision.current === revision) {
         setItems(reviewResult.items);
         setLogs(logResult.logs);
+        setMessage('');
       }
     }).catch((error) => {
-      if (!cancelled) {
+      if (requestRevision.current === revision) {
         setTone('error');
         setMessage(errorText(error));
       }
-    }).finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+    }).finally(() => {
+      if (requestRevision.current === revision) setLoading(false);
+    });
+    return () => { requestRevision.current += 1; };
   }, []);
 
-  const monthItems = useMemo(
-    () => items.filter((item) => item.record.workDate.startsWith(month)),
-    [items, month],
+  const accountOptions = useMemo(() => {
+    const users = new Map<string, ReviewSalaryItem['user']>();
+    for (const item of items) users.set(item.user.id, item.user);
+    return [...users.values()].sort((left, right) => left.displayName.localeCompare(right.displayName, 'zh-CN'));
+  }, [items]);
+  const duplicateEmployeeNames = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const user of accountOptions) counts.set(user.displayName, (counts.get(user.displayName) ?? 0) + 1);
+    return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
+  }, [accountOptions]);
+  const accountMonthItems = useMemo(
+    () => items.filter((item) => item.record.workDate.startsWith(month)
+      && (!selectedUserId || item.user.id === selectedUserId)),
+    [items, month, selectedUserId],
   );
   const visibleItems = useMemo(() => {
     const status = filter === 'pending' ? 2 : filter === 'approved' ? 3 : filter === 'rejected' ? 4 : null;
-    return status ? monthItems.filter((item) => item.record.status === status) : monthItems;
-  }, [filter, monthItems]);
+    return status ? accountMonthItems.filter((item) => item.record.status === status) : accountMonthItems;
+  }, [accountMonthItems, filter]);
   const totals = useMemo(() => ({
-    pending: summarize(monthItems, 2),
-    approved: summarize(monthItems, 3),
-    rejected: summarize(monthItems, 4),
-  }), [monthItems]);
-  const duplicateEmployeeNames = useMemo(() => {
-    const users = new Map(items.map((item) => [item.user.id, item.user]));
-    const counts = new Map<string, number>();
-    for (const user of users.values()) counts.set(user.displayName, (counts.get(user.displayName) ?? 0) + 1);
-    return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
-  }, [items]);
+    pending: summarize(accountMonthItems, 2),
+    approved: summarize(accountMonthItems, 3),
+    rejected: summarize(accountMonthItems, 4),
+  }), [accountMonthItems]);
+  const interactionLocked = loading || Boolean(busyId);
 
   const review = async (item: ReviewSalaryItem, decision: 'approve' | 'reject') => {
     const auditMemo = notes[item.record.id]?.trim() ?? '';
@@ -106,8 +126,14 @@ export function ReviewWorkspace() {
       setMessage(decision === 'approve'
         ? '工资已通过。'
         : '工资已驳回。');
-      const recent = await apiRequest<{ logs: AuditLogItem[] }>('/api/audit/recent');
-      setLogs(recent.logs);
+      setNotes((current) => {
+        const next = { ...current };
+        delete next[item.record.id];
+        return next;
+      });
+      void apiRequest<{ logs: AuditLogItem[] }>('/api/audit/recent')
+        .then((recent) => setLogs(recent.logs))
+        .catch(() => undefined);
     } catch (error) {
       setTone('error');
       setMessage(errorText(error));
@@ -124,8 +150,17 @@ export function ReviewWorkspace() {
           <h1>工资审核工作台</h1>
         </div>
         <div className="heading-actions">
-          <label className="month-picker"><span>工作月份</span><input type="month" value={month} onChange={(event) => setMonth(event.target.value)} /></label>
-          <button type="button" className="secondary-button" onClick={() => void load()} disabled={loading}>刷新</button>
+          <label className="review-account-picker">
+            <span>查看账号</span>
+            <select value={selectedUserId} disabled={interactionLocked} onChange={(event) => setSelectedUserId(event.target.value)}>
+              <option value="">全部账号</option>
+              {accountOptions.map((user) => <option key={user.id} value={user.id}>
+                {user.displayName}{duplicateEmployeeNames.has(user.displayName) ? ` · ${user.email}` : ''}
+              </option>)}
+            </select>
+          </label>
+          <label className="month-picker"><span>工作月份</span><input type="month" value={month} disabled={interactionLocked} onChange={(event) => setMonth(event.target.value || currentMonth())} /></label>
+          <button type="button" className="secondary-button" onClick={() => void load()} disabled={interactionLocked}>刷新</button>
         </div>
       </div>
 
@@ -142,14 +177,14 @@ export function ReviewWorkspace() {
           ['approved', '已通过'],
           ['rejected', '已驳回'],
         ] as Array<[Filter, string]>).map(([value, label]) => (
-          <button type="button" key={value} className={filter === value ? 'is-active' : ''} onClick={() => setFilter(value)}>{label}</button>
+          <button type="button" key={value} disabled={interactionLocked} aria-pressed={filter === value} className={filter === value ? 'is-active' : ''} onClick={() => setFilter(value)}>{label}</button>
         ))}
       </div>
 
       <StatusMessage message={message} tone={tone} />
 
       {loading ? <div className="empty-state">正在加载审核队列…</div> : visibleItems.length === 0 ? (
-        <div className="empty-state">当前月份与筛选下没有工资记录。</div>
+        <div className="empty-state">{selectedUserId ? '该账号在当前月份与状态下没有工资记录。' : '当前月份与状态下没有工资记录。'}</div>
       ) : (
         <div className="review-list">
           {visibleItems.map((item) => {
@@ -157,32 +192,38 @@ export function ReviewWorkspace() {
             const status = STATUS[record.status as SalaryStatus];
             const pending = record.status === 2;
             return (
-              <article className="review-card" key={record.id}>
+              <article className={`review-card review-card--${status.tone}`} key={record.id}>
                 <header>
-                  <div><strong>{item.user.displayName}</strong>{duplicateEmployeeNames.has(item.user.displayName) && <small>{item.user.email}</small>}</div>
-                  <span className={`status-badge status-badge--${status.tone}`}>{status.label}</span>
+                  <div className="review-card__identity">
+                    <div><strong>{item.user.displayName}</strong>{duplicateEmployeeNames.has(item.user.displayName) && <small>{item.user.email}</small>}</div>
+                    <time dateTime={record.workDate}>{record.workDate}</time>
+                  </div>
+                  <div className="review-card__headline">
+                    <span className="review-card__amount"><Money amount={record.finalSalary} currency={record.currency} /></span>
+                    <span className={`status-badge status-badge--${status.tone}`}>{status.label}</span>
+                  </div>
                 </header>
                 <dl>
-                  <div><dt>工作日期</dt><dd>{record.workDate}</dd></div>
-                  <div><dt>负责人</dt><dd>{record.checkUser}</dd></div>
                   <div><dt>所属部门</dt><dd>{getDepartmentLabel(record.departmentKey, record.departmentLabel)}</dd></div>
                   <div><dt>计费方式</dt><dd>{getApplyTypeLabel(record.applyType)}</dd></div>
-                  <div><dt>申报来源</dt><dd>{salarySourceLabel(record.source)}</dd></div>
-                  <div><dt>创建人</dt><dd>{record.createdByName || item.user.displayName}</dd></div>
-                  <div><dt>提交人</dt><dd>{record.submittedByName || item.user.displayName}</dd></div>
                   <div><dt>劳动 / 休息</dt><dd>{formatHours(record.workHours)} / {formatHours(record.restHours)} 小时</dd></div>
-                  <div><dt>工资金额</dt><dd className="review-card__amount"><Money amount={record.finalSalary} currency={record.currency} /></dd></div>
+                  <div><dt>负责人</dt><dd>{record.checkUser}</dd></div>
                 </dl>
-                {(record.workContent || record.memo) && <div className="review-card__copy">
-                  {record.workContent && <p><b>工作内容：</b>{record.workContent}</p>}
-                  {record.memo && <p><b>员工备注：</b>{record.memo}</p>}
-                </div>}
+                {record.workContent && <p className="review-card__work-content"><b>工作内容</b><span>{record.workContent}</span></p>}
                 {record.attachments.length > 0 && <div className="attachment-links"><b>工资附件</b>{record.attachments.map((key, index) => (
                   <a key={key} href={`/api/files?key=${encodeURIComponent(key)}`} target="_blank" rel="noreferrer">附件 {index + 1}</a>
                 ))}</div>}
+                <details className="review-card__details">
+                  <summary>申报信息 · {salarySourceLabel(record.source)}</summary>
+                  <div>
+                    <span><b>创建人</b>{record.createdByName || item.user.displayName}</span>
+                    <span><b>提交人</b>{record.submittedByName || item.user.displayName}</span>
+                    {record.memo && <p><b>员工备注</b>{record.memo}</p>}
+                  </div>
+                </details>
                 {pending ? <div className="review-actions">
-                  <label><span>审核备注（驳回时必填）</span><textarea maxLength={1000} value={notes[record.id] ?? ''} onChange={(event) => setNotes((current) => ({ ...current, [record.id]: event.target.value }))} rows={2} /></label>
-                  <div><button type="button" className="secondary-button danger-button" disabled={busyId === record.id} onClick={() => void review(item, 'reject')}>驳回</button><button type="button" className="primary-button" disabled={busyId === record.id} onClick={() => void review(item, 'approve')}>{busyId === record.id ? '处理中…' : '审核通过'}</button></div>
+                  <label><span>审核备注（驳回时必填）</span><textarea maxLength={1000} disabled={interactionLocked} value={notes[record.id] ?? ''} onChange={(event) => setNotes((current) => ({ ...current, [record.id]: event.target.value }))} rows={1} /></label>
+                  <div><button type="button" className="secondary-button danger-button" disabled={interactionLocked} onClick={() => void review(item, 'reject')}>驳回</button><button type="button" className="primary-button" disabled={interactionLocked} onClick={() => void review(item, 'approve')}>{busyId === record.id ? '处理中…' : '审核通过'}</button></div>
                 </div> : record.auditMemo ? <p className="audit-memo"><b>审核备注：</b>{record.auditMemo}</p> : null}
               </article>
             );
