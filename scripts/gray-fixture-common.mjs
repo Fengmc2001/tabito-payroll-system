@@ -218,6 +218,10 @@ export class PayrollClient {
   }
 
   async request(path, options = {}) {
+    if (options.method === 'PATCH' && options.body?.profile && !Object.hasOwn(options.body, 'expectedProfileVersion')) {
+      const snapshot = await this.request(path, { cookie: options.cookie });
+      options = { ...options, body: { ...options.body, expectedProfileVersion: snapshot.data.account?.profileVersion } };
+    }
     const headers = new Headers(options.headers);
     if (options.cookie) headers.set('cookie', options.cookie);
     if (options.body !== undefined) headers.set('content-type', 'application/json');

@@ -1,9 +1,12 @@
 'use client';
 
+import { appPath } from '../lib/app-path';
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Download, Paperclip } from 'lucide-react';
+import { useFeedback } from './interaction-guards';
 import { ApiClientError, apiRequest } from '../lib/api-client';
-import { CurrencyAmounts, TransferSheetRow, currentMonth } from '../lib/payroll';
+import { CurrencyAmounts, TransferSheetRow, currentMonth, monthIsValid, effectivePayee } from '../lib/payroll';
 import { CurrencyAmountsView, Money } from './payroll-ui';
 import { StatusMessage } from './form-controls';
 
@@ -12,7 +15,7 @@ export function TransferSheetWorkspace() {
   const [rows, setRows] = useState<TransferSheetRow[]>([]);
   const [loadedMonth, setLoadedMonth] = useState('');
   const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState('');
+  const [message, setMessage, feedbackRevision] = useFeedback();
   const requestRevision = useRef(0);
 
   const load = useCallback(async (selectedMonth: string) => {
@@ -34,7 +37,7 @@ export function TransferSheetWorkspace() {
     } finally {
       if (requestRevision.current === revision) setLoading(false);
     }
-  }, []);
+  }, [setMessage]);
 
   useEffect(() => {
     const revision = requestRevision.current + 1;
@@ -53,7 +56,7 @@ export function TransferSheetWorkspace() {
       if (requestRevision.current === revision) setLoading(false);
     });
     return () => { requestRevision.current += 1; };
-  }, [month]);
+  }, [month, setMessage]);
 
   const visibleRows = loadedMonth === month ? rows : [];
   const jpyTotal = sumApproved(visibleRows, 'JPY');
@@ -65,7 +68,7 @@ export function TransferSheetWorkspace() {
       <div className="heading-actions">
         <label className="month-picker">
           <span>查看月份</span>
-          <input type="month" value={month} onChange={(event) => { setLoading(true); setMonth(event.target.value || currentMonth()); }} />
+          <input type="month" value={month} onBlur={(event) => { event.currentTarget.value = month; }} onChange={(event) => { const next = event.target.value || currentMonth(); if (!monthIsValid(next)) { event.target.value = month; setMessage('请选择有效月份。'); return; } event.target.value = next; if (next === month) return; setLoading(true); setMonth(next); }} />
         </label>
         <button type="button" className="secondary-button" disabled={loading} onClick={() => void load(month)}>刷新</button>
         <button
@@ -79,7 +82,7 @@ export function TransferSheetWorkspace() {
       </div>
     </div>
 
-    <StatusMessage message={message} tone="error" />
+    <StatusMessage message={message} eventId={feedbackRevision} tone="error" />
 
     <div className="transfer-sheet__summary">
       <span><b>{visibleRows.length}</b> 名员工</span>
@@ -99,10 +102,10 @@ export function TransferSheetWorkspace() {
           <td>{row.profile.bankBranch || '未填写'}</td>
           <td>{row.profile.bankAccountNumber || '未填写'}</td>
           <td>{row.profile.bankAccountHolder || '未填写'}</td>
-          <td>{row.profile.payeeName || row.user.displayName}</td>
-          <td>{row.profile.payeeIdNumber || '未填写'}</td>
+          <td>{effectivePayee(row.profile, row.user.displayName).name}</td>
+          <td>{effectivePayee(row.profile, row.user.displayName).idNumber || '未填写'}</td>
           <td className="table-priority"><CurrencyAmountsView amounts={row.approvedAmounts} /></td>
-          <td>{row.pdfFiles.length === 0 ? <span className="muted-text">无</span> : <div className="transfer-pdf-links">{row.pdfFiles.map((file, index) => <a key={file.key} href={`/api/files?key=${encodeURIComponent(file.key)}`} target="_blank" rel="noreferrer" download title={file.name}><Paperclip size={11} aria-hidden="true" />PDF {index + 1}</a>)}</div>}</td>
+          <td>{row.pdfFiles.length === 0 ? <span className="muted-text">无</span> : <div className="transfer-pdf-links">{row.pdfFiles.map((file, index) => <a key={file.key} href={appPath(`/api/files?key=${encodeURIComponent(file.key)}`)} target="_blank" rel="noreferrer" download title={file.name}><Paperclip size={11} aria-hidden="true" />PDF {index + 1}</a>)}</div>}</td>
         </tr>)}</tbody>
       </table></div>
     )}
@@ -127,8 +130,8 @@ function downloadTransferSheet(rows: TransferSheetRow[], month: string) {
     row.profile.bankBranch,
     row.profile.bankAccountNumber,
     row.profile.bankAccountHolder,
-    row.profile.payeeName || row.user.displayName,
-    row.profile.payeeIdNumber,
+    effectivePayee(row.profile, row.user.displayName).name,
+    effectivePayee(row.profile, row.user.displayName).idNumber,
     row.approvedAmounts.JPY,
     row.approvedAmounts.CNY,
   ]);

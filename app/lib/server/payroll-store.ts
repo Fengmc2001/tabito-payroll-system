@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { accountAuditQuery } from '../account-audit-query';
 import {
   AccountRole,
   AccountStatus,
@@ -38,6 +39,7 @@ import {
   monthDateRange,
   monthIsValid,
   mutationRequestIsSameOrigin,
+  normalizePayeeProfile,
   profileBasicsAreReady,
   profileMissingRequirements,
   recalculateRecord,
@@ -412,35 +414,37 @@ export async function getAccount(userId: string) {
   const user = await getUserById(userId);
   if (!user) throw new ApiError(404, '未找到用户。');
   const account = toAccount(user);
+  account.profileVersion = await sha256Hex(user.profile_json);
   account.salaryRecords = await listSalaryRecords(userId);
   return account;
 }
 
-export async function saveProfile(userId: string, input: Profile) {
+export async function saveProfile(userId: string, input: Profile, expectedProfileVersion?: string) {
   const db = await database();
   const profile = sanitizeProfile(input);
   const basicError = profileBasicsError(profile);
   if (basicError) throw new ApiError(400, basicError);
+  if (!expectedProfileVersion) throw new ApiError(400, '缺少资料版本，请刷新页面后重试。');
+  const user = await getUserById(userId);
+  if (!user || user.status !== 'active') throw new ApiError(404, '未找到用户。');
+  if (await sha256Hex(user.profile_json) !== expectedProfileVersion) throw new ApiError(409, '资料已在其他页面更新。请先复制未保存的内容，再刷新页面核对后重新修改。');
   await assertOwnedFiles(db, userId, [...profile.idFileNames, ...profile.bankFileNames]);
-  const now = new Date().toISOString();
+  const now = nextVersionTimestamp(user.updated_at);
+  const auditId = newId('audit');
   const statements: D1PreparedStatement[] = [
-    db.prepare("UPDATE payroll_users SET profile_json = ?, updated_at = ? WHERE id = ? AND status = 'active'")
-      .bind(JSON.stringify(profile), now, userId),
-    db.prepare("DELETE FROM payroll_file_references WHERE reference_type = 'profile_id' AND reference_id = ?")
-      .bind(userId),
-    ...profile.idFileNames.map((key) => validatedFileReferenceInsertStatement(
-      db, userId, 'profile_id', userId, key, now,
-    )),
-    db.prepare("DELETE FROM payroll_file_references WHERE reference_type = 'profile_bank' AND reference_id = ?")
-      .bind(userId),
-    ...profile.bankFileNames.map((key) => validatedFileReferenceInsertStatement(
-      db, userId, 'profile_bank', userId, key, now,
-    )),
-    auditStatement(db, userId, 'profile.update', 'user', userId, {}, now),
+    db.prepare("UPDATE payroll_users SET profile_json = ?, updated_at = ? WHERE id = ? AND status = 'active' AND profile_json = ?")
+      .bind(JSON.stringify(profile), now, userId, user.profile_json),
+    db.prepare(`INSERT INTO payroll_audit_logs
+      (id, actor_user_id, action, target_type, target_id, detail_json, subject_user_id, business_month, created_at)
+      SELECT ?, ?, 'profile.update', 'user', ?, '{}', ?, NULL, ? WHERE changes() = 1`)
+      .bind(auditId, userId, userId, userId, now),
+    ...conditionalSalaryFileReferenceStatements(db, userId, userId, profile.idFileNames, auditId, 'profile_id'),
+    ...conditionalSalaryFileReferenceStatements(db, userId, userId, profile.bankFileNames, auditId, 'profile_bank'),
   ];
   const [result] = await db.batch(statements);
-  if (!result.meta.changes) throw new ApiError(404, '未找到用户。');
-  return getAccount(userId);
+  if (!result.meta.changes) throw new ApiError(409, '资料或账号状态已发生变化，请刷新页面核对后重试。');
+  const account = await getAccount(userId);
+  return { ...account, profile, profileVersion: await sha256Hex(JSON.stringify(profile)) };
 }
 
 export async function resetPassword(
@@ -707,10 +711,11 @@ export async function saveProxySalaryRecord(
   if (existing) {
     const statements = [db.prepare(`UPDATE payroll_salary_records SET status = ?, work_date = ?, final_salary = ?, currency = ?,
       data_json = ?, updated_at = ? WHERE id = ? AND user_id = ? AND status = 1 AND updated_at = ?
+        AND EXISTS (SELECT 1 FROM payroll_users WHERE id = ? AND status = 'active')
         AND EXISTS (SELECT 1 FROM payroll_users
           WHERE id = ? AND status = 'active' AND role IN ('reviewer', 'admin'))`)
       .bind(record.status, record.workDate, record.finalSalary, record.currency, serialized, now,
-        record.id, targetUserId, existing.updatedAt, actor.userId)];
+        record.id, targetUserId, existing.updatedAt, targetUserId, actor.userId)];
     statements.push(changedSalaryAuditStatement(
       db,
       auditId,
@@ -1039,8 +1044,8 @@ export async function runDueRecurringPayrollRules(
         throw new ApiError(409, '该账号已停用，不能新增工资。');
       }
       const profileError = profileSubmissionError(parseProfile(row.user_profile_json));
-      if (profileError) throw new ApiError(400, `该员工${profileError}`);
       const rule = toRecurringPayrollRule(row);
+      if (rule.submit && profileError) throw new ApiError(400, `该员工${profileError}`);
       const schedule = scheduleForMonth(rule.schedule, month);
       const sessions = expandFixedPayrollSchedule(month, schedule);
       if (sessions.length === 0 || sessions.length > MAX_BATCH_RECORDS) throw new ApiError(400, '本月规律没有可生成的日期。');
@@ -1878,7 +1883,7 @@ function toManagedUser(row: UserRow): ManagedUser {
 
 function parseProfile(value: string): Profile {
   try {
-    return { ...createEmptyProfile(), ...JSON.parse(value) } as Profile;
+    return normalizePayeeProfile({ ...createEmptyProfile(), ...JSON.parse(value) } as Profile);
   } catch {
     return createEmptyProfile();
   }
@@ -1905,7 +1910,11 @@ function sanitizeProfile(input: Profile) {
   if (Array.isArray(source.bankFileNames) && source.bankFileNames.length > 2) {
     throw new ApiError(400, '银行卡正反面最多上传 2 个附件。');
   }
-  profile.idFileNames = cleanFileKeys(source.idFileNames, 2);
+  const idFileLimit = profile.idType === 'passport' ? 1 : 2;
+  if (Array.isArray(source.idFileNames) && source.idFileNames.length > idFileLimit) {
+    throw new ApiError(400, `该证件类型最多上传 ${idFileLimit} 个附件，请先移除多余附件。`);
+  }
+  profile.idFileNames = cleanFileKeys(source.idFileNames, idFileLimit);
   profile.bankFileNames = cleanFileKeys(source.bankFileNames, 2);
   if (profile.birthday && !birthdayIsValid(profile.birthday)) {
     throw new ApiError(400, '生日必须是有效且不晚于今天的日期。');
@@ -1913,7 +1922,7 @@ function sanitizeProfile(input: Profile) {
   if (profile.idExpiryDate && !dateIsValid(profile.idExpiryDate)) {
     throw new ApiError(400, '证件有效期限无效。');
   }
-  return profile;
+  return normalizePayeeProfile(profile);
 }
 
 async function sanitizeSalaryRecord(
@@ -2039,47 +2048,29 @@ async function canReadFile(db: D1Database, actor: SessionActor, file: FileRow) {
   return actor.userId === file.user_id || actor.role === 'admin' || actor.role === 'reviewer';
 }
 
-function validatedFileReferenceInsertStatement(
-  db: D1Database,
-  ownerUserId: string,
-  referenceType: 'profile_id' | 'profile_bank' | 'salary',
-  referenceId: string,
-  key: string,
-  createdAt: string,
-) {
-  return db.prepare(`INSERT INTO payroll_file_references
-    (file_key, owner_user_id, reference_type, reference_id, created_at)
-    SELECT f.key, f.user_id, ?, ?, ?
-    FROM payroll_files f WHERE f.key = ? AND f.user_id = ?
-    UNION ALL
-    SELECT NULL, ?, ?, ?, ?
-    WHERE NOT EXISTS (SELECT 1 FROM payroll_files WHERE key = ? AND user_id = ?)`)
-    .bind(referenceType, referenceId, createdAt, key, ownerUserId,
-      ownerUserId, referenceType, referenceId, createdAt, key, ownerUserId);
-}
-
 function conditionalSalaryFileReferenceStatements(
   db: D1Database,
   ownerUserId: string,
   referenceId: string,
   keys: string[],
   mutationAuditId: string,
+  referenceType: 'salary' | 'profile_id' | 'profile_bank' = 'salary',
 ) {
   const guardSql = 'EXISTS (SELECT 1 FROM payroll_audit_logs WHERE id = ?)';
   const statements: D1PreparedStatement[] = [
     db.prepare(`DELETE FROM payroll_file_references
-      WHERE reference_type = 'salary' AND reference_id = ? AND ${guardSql}`)
+      WHERE reference_type = '${referenceType}' AND reference_id = ? AND ${guardSql}`)
       .bind(referenceId, mutationAuditId),
   ];
   const now = new Date().toISOString();
   for (const key of keys) {
     statements.push(db.prepare(`INSERT INTO payroll_file_references
       (file_key, owner_user_id, reference_type, reference_id, created_at)
-      SELECT f.key, f.user_id, 'salary', ?, ?
+      SELECT f.key, f.user_id, '${referenceType}', ?, ?
       FROM payroll_files f
       WHERE f.key = ? AND f.user_id = ? AND ${guardSql}
       UNION ALL
-      SELECT NULL, ?, 'salary', ?, ?
+      SELECT NULL, ?, '${referenceType}', ?, ?
       WHERE ${guardSql}
         AND NOT EXISTS (SELECT 1 FROM payroll_files WHERE key = ? AND user_id = ?)`)
       .bind(
@@ -2153,10 +2144,13 @@ function auditStatement(
     (id, actor_user_id, action, target_type, target_id, detail_json, subject_user_id, business_month, created_at)
     SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
     WHERE (? IS NULL OR EXISTS (SELECT 1 FROM payroll_users WHERE id = ?))
-      AND (? IS NULL OR EXISTS (SELECT 1 FROM payroll_users WHERE id = ?))`)
+      AND (? IS NULL OR EXISTS (SELECT 1 FROM payroll_users WHERE id = ?))
+      AND (? <> 'salary_batch' OR EXISTS (SELECT 1 FROM payroll_salary_batches WHERE id = ?))
+      AND (? <> 'recurring_rule' OR EXISTS (SELECT 1 FROM payroll_recurring_rules WHERE id = ?))`)
     .bind(newId('audit'), actorUserId, action, targetType, targetId, JSON.stringify(detail),
       subjectUserId, businessMonth, createdAt,
-      actorUserId, actorUserId, subjectUserId, subjectUserId);
+      actorUserId, actorUserId, subjectUserId, subjectUserId,
+      targetType, targetId, targetType, targetId);
 }
 
 function changedSalaryAuditStatement(
@@ -2195,7 +2189,7 @@ function auditDimensions(targetType: string, targetId: string, detail: Record<st
 
 async function queryAuditLogs(db: D1Database, limit: number) {
   const result = await db.prepare(`SELECT l.id, l.actor_user_id, u.email AS actor_email, u.profile_json AS actor_profile_json,
-    l.action, l.target_type, l.target_id, l.detail_json, l.created_at
+    l.action, l.target_type, l.target_id, l.detail_json, l.business_month, l.created_at
     FROM payroll_audit_logs l
     LEFT JOIN payroll_users u ON u.id = l.actor_user_id
     ORDER BY l.created_at DESC LIMIT ?`).bind(limit).all<AuditRow>();
@@ -2203,27 +2197,8 @@ async function queryAuditLogs(db: D1Database, limit: number) {
 }
 
 async function queryAccountAuditLogs(db: D1Database, userId: string, month?: string) {
-  const monthClause = month ? "AND (l.business_month = ? OR (l.business_month IS NULL AND l.created_at LIKE ?))" : '';
-  const statement = db.prepare(`SELECT l.id, l.actor_user_id, u.email AS actor_email, u.profile_json AS actor_profile_json,
-    l.action, l.target_type, l.target_id, l.detail_json, l.created_at
-    FROM payroll_audit_logs l
-    LEFT JOIN payroll_users u ON u.id = l.actor_user_id
-    WHERE (
-      l.subject_user_id = ?
-      OR l.actor_user_id = ?
-      OR (l.target_type = 'user' AND l.target_id = ?)
-      OR (l.target_type = 'salary_record' AND EXISTS (
-        SELECT 1 FROM payroll_salary_records r WHERE r.id = l.target_id AND r.user_id = ?
-      ))
-      OR (l.target_type = 'file' AND EXISTS (
-        SELECT 1 FROM payroll_files f WHERE f.key = l.target_id AND f.user_id = ?
-      ))
-      OR l.detail_json LIKE ?
-    ) ${monthClause}
-    ORDER BY l.created_at DESC`);
-  const bindings: Array<string> = [userId, userId, userId, userId, userId, `%${userId}%`];
-  if (month) bindings.push(month, `${month}-%`);
-  const result = await statement.bind(...bindings).all<AuditRow>();
+  const query = accountAuditQuery(userId, month);
+  const result = await db.prepare(query.sql).bind(...query.params).all<AuditRow>();
   return result.results.map(toAuditLogItem);
 }
 
@@ -2263,7 +2238,8 @@ async function resolveWorkManager(db: D1Database, requestedId: unknown, legacyLa
   const id = cleanStringStrict(requestedId, 120, '工作负责人');
   if (id) return managers.find((manager) => manager.id === id) ?? null;
   const label = cleanStringStrict(legacyLabel, 100, '工作负责人');
-  return managers.find((manager) => manager.label === label || manager.email === label) ?? null;
+  const matches = managers.filter((manager) => manager.label === label || manager.email === label);
+  return matches.length === 1 ? matches[0] : null;
 }
 
 function monthlySummaries(records: SalaryRecord[]) {
@@ -2325,6 +2301,7 @@ function toAuditLogItem(row: AuditRow): AuditLogItem {
     targetType: row.target_type,
     targetId: row.target_id,
     detail: parseJsonObject(row.detail_json),
+    businessMonth: row.business_month ?? null,
     createdAt: row.created_at,
   };
 }

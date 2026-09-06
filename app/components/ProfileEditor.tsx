@@ -1,35 +1,55 @@
 'use client';
 
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { FileNameInput, Field, FormSection, StatusMessage, invalidFormControlMessage } from './form-controls';
-import { PROFILE_TEXT_MAX_LENGTH, Profile, birthdayIsValid, today } from '../lib/payroll';
+import { useFeedback, useUnsavedChanges, useUploadTracker } from './interaction-guards';
+import { PROFILE_TEXT_MAX_LENGTH, Profile, birthdayIsValid, today, normalizePayeeProfile } from '../lib/payroll';
 
 type ProfileTab = 'basic' | 'documents' | 'payment' | 'password';
 
 export function ProfileEditor({
   profile,
+  profileVersion,
   firstTime = false,
   onSave,
   onResetPassword,
   onUpload,
 }: {
   profile: Profile;
+  profileVersion: string;
   firstTime?: boolean;
-  onSave: (profile: Profile) => Promise<string | null>;
+  onSave: (profile: Profile, expectedProfileVersion: string) => Promise<{ error?: string; profileVersion?: string }>;
   onResetPassword: (oldPassword: string, newPassword: string) => Promise<string | null>;
   onUpload?: (file: File) => Promise<string>;
 }) {
-  const [draft, setDraft] = useState(profile);
+  const [savedVersion, setSavedVersion] = useState(profileVersion);
+  const [draft, setDraft] = useState(() => normalizePayeeProfile(profile));
+  const [saved, setSaved] = useState(() => JSON.stringify(normalizePayeeProfile(profile)));
+  const { uploading, trackUpload } = useUploadTracker(onUpload);
   const [tab, setTab] = useState<ProfileTab>('basic');
-  const [message, setMessage] = useState('');
+  const [message, setMessage, messageRevision] = useFeedback();
   const [messageTone, setMessageTone] = useState<'success' | 'error' | 'info'>('success');
   const [busy, setBusy] = useState(false);
 
+  const dirty = JSON.stringify(draft) !== saved;
+  useUnsavedChanges(dirty, busy || uploading);
+  useEffect(() => {
+    if (dirty || busy || uploading || !profileVersion || profileVersion === savedVersion) return;
+    const timer = window.setTimeout(() => {
+      const fresh = normalizePayeeProfile(profile);
+      setDraft(fresh);
+      setSaved(JSON.stringify(fresh));
+      setSavedVersion(profileVersion);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [profile, profileVersion, savedVersion, dirty, busy, uploading]);
+
   const setField = <K extends keyof Profile>(field: K, value: Profile[K]) => {
-    setDraft((current) => ({ ...current, [field]: value }));
+    setDraft((current) => normalizePayeeProfile({ ...current, [field]: value }));
   };
 
   const changeTab = (nextTab: ProfileTab) => {
+    if (busy || uploading) return;
     setMessage('');
     setTab(nextTab);
   };
@@ -41,6 +61,10 @@ export function ProfileEditor({
 
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (busy || uploading) return;
+    if (draft.idFileNames.length > (draft.idType === 'passport' ? 1 : 2)) {
+      setMessageTone('error'); setMessage('请先移除该证件类型多余的附件。'); setTab('documents'); return;
+    }
     if (!draft.lastNameCn.trim() || !draft.firstNameCn.trim()) {
       setMessageTone('error');
       setMessage('中文姓和中文名为必填项。');
@@ -94,14 +118,18 @@ export function ProfileEditor({
     }
 
     setBusy(true);
-    const error = await onSave(draft);
-    setBusy(false);
-    if (error) {
+    let result: { error?: string; profileVersion?: string };
+    try { result = await onSave(draft, savedVersion); }
+    catch { result = { error: '保存失败，请重试。' }; }
+    finally { setBusy(false); }
+    if (result.error || !result.profileVersion) {
       setMessageTone('error');
-      setMessage(error);
+      setMessage(result.error || '保存失败，请重试。');
       return;
     }
+    setSavedVersion(result.profileVersion);
     setMessageTone('success');
+    setSaved(JSON.stringify(draft));
     setMessage(firstTime ? '基本资料已保存。' : '资料已保存。');
   };
 
@@ -128,15 +156,17 @@ export function ProfileEditor({
             <PasswordPanel onResetPassword={onResetPassword} />
           ) : (
             <form onSubmit={save} onInvalidCapture={reportInvalid}>
+              <fieldset className="form-operation-fields" disabled={busy || uploading}>
               {tab === 'basic' && <BasicFields draft={draft} firstTime={firstTime} setField={setField} />}
-              {tab === 'documents' && <DocumentFields draft={draft} setField={setField} onUpload={onUpload} />}
-              {tab === 'payment' && <PaymentFields draft={draft} setField={setField} onUpload={onUpload} />}
-              <StatusMessage message={message} tone={messageTone} />
+              {tab === 'documents' && <DocumentFields draft={draft} setField={setField} onUpload={trackUpload} />}
+              {tab === 'payment' && <PaymentFields draft={draft} setField={setField} onUpload={trackUpload} />}
+              <StatusMessage message={message} tone={messageTone} eventId={messageRevision} />
               <div className="form-actions">
-                <button className="primary-button" type="submit" disabled={busy}>
+                <button className="primary-button" type="submit" disabled={busy || uploading}>
                   {busy ? '保存中…' : firstTime ? '保存基本资料并进入首页' : '保存'}
                 </button>
               </div>
+              </fieldset>
             </form>
           )}
         </div>
@@ -317,7 +347,7 @@ function PaymentFields({
             <option value="alipay">支付宝</option>
           </select>
         </Field>
-        <Field label="银行卡正反面" required hint="至少上传 1 个附件，最多 2 个。">
+        <Field label="银行卡正反面" required>
           <FileNameInput value={draft.bankFileNames} maximum={2} onUpload={onUpload} onChange={(files) => setField('bankFileNames', files)} />
         </Field>
         <Field label={isAlipay ? '支付宝账户' : '银行名称'} required>
@@ -366,7 +396,7 @@ function PasswordPanel({
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirm, setConfirm] = useState('');
-  const [message, setMessage] = useState('');
+  const [message, setMessage, messageRevision] = useFeedback();
   const [tone, setTone] = useState<'success' | 'error'>('success');
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -423,7 +453,7 @@ function PasswordPanel({
           </Field>
         </div>
       </FormSection>
-      <StatusMessage message={message} tone={tone} />
+      <StatusMessage message={message} tone={tone} eventId={messageRevision} />
       <div className="form-actions"><button type="submit" className="primary-button">重设密码</button></div>
     </form>
   );

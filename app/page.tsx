@@ -26,7 +26,8 @@ import { PayrollWorkspace } from './components/PayrollWorkspace';
 import { ReviewWorkspace } from './components/ReviewWorkspace';
 import { SalaryHistory } from './components/SalaryWorkspace';
 import { TransferSheetWorkspace } from './components/TransferSheetWorkspace';
-import { Field, StatusMessage, invalidFormControlMessage } from './components/form-controls';
+import { Field, NavigationPromptHost, StatusMessage, invalidFormControlMessage } from './components/form-controls';
+import { confirmPageLeave, useFeedback } from './components/interaction-guards';
 import { ApiClientError, apiRequest } from './lib/api-client';
 import {
   APP_TITLE,
@@ -180,6 +181,7 @@ export default function HomePage() {
   };
 
   const logout = async () => {
+    if (!await confirmPageLeave()) return;
     setSystemMessage('');
     try {
       await apiRequest('/api/users/logout', { method: 'POST' });
@@ -190,13 +192,13 @@ export default function HomePage() {
     }
   };
 
-  const saveProfile = async (profile: Profile) => {
-    if (!activeAccount) return '登录状态已过期。';
+  const saveProfile = async (profile: Profile, expectedProfileVersion: string): Promise<{ error?: string; profileVersion?: string }> => {
+    if (!activeAccount) return { error: '登录状态已过期。' };
     const userId = activeAccount.id;
     try {
       const { account } = await apiRequest<{ account: StoredAccount }>(`/api/users/${userId}`, {
         method: 'PATCH',
-        body: { profile },
+        body: { profile, expectedProfileVersion },
       });
       setActiveAccount(account);
       setSystemMessage('');
@@ -205,11 +207,11 @@ export default function HomePage() {
         return `工资功能尚未解锁。请先补全：${profileMissingRequirements(account.profile).join('、')}。`;
       });
       if (route === '/profile/first-setting' && profileBasicsAreReady(account.profile)) navigate('/');
-      return null;
+      return { profileVersion: account.profileVersion };
     } catch (error) {
       const message = errorMessage(error);
       setSystemMessage(message);
-      return message;
+      return { error: message };
     }
   };
 
@@ -282,7 +284,8 @@ export default function HomePage() {
     return result.file.key;
   };
 
-  const navigateWithinApp = (nextRoute: AppRoute) => {
+  const navigateWithinApp = async (nextRoute: AppRoute) => {
+    if (!await confirmPageLeave()) return;
     if (activeAccount && (isPayrollRoute(nextRoute) || nextRoute === '/pay/history') && !profileIsReady(activeAccount.profile)) {
       setProfileGateMessage(`工资功能尚未解锁。请先补全：${profileMissingRequirements(activeAccount.profile).join('、')}。`);
     } else if (!['/profile/setting', '/profile/first-setting'].includes(nextRoute)) {
@@ -300,9 +303,9 @@ export default function HomePage() {
   }
 
   const content = route === '/profile/first-setting' ? (
-    <ProfileEditor profile={activeAccount.profile} firstTime onSave={saveProfile} onResetPassword={resetPassword} onUpload={uploadFile} />
+    <ProfileEditor profile={activeAccount.profile} profileVersion={activeAccount.profileVersion ?? ''} firstTime onSave={saveProfile} onResetPassword={resetPassword} onUpload={uploadFile} />
   ) : route === '/profile/setting' ? (
-    <ProfileEditor profile={activeAccount.profile} onSave={saveProfile} onResetPassword={resetPassword} onUpload={uploadFile} />
+    <ProfileEditor profile={activeAccount.profile} profileVersion={activeAccount.profileVersion ?? ''} onSave={saveProfile} onResetPassword={resetPassword} onUpload={uploadFile} />
   ) : isPayrollRoute(route) ? (
     <PayrollWorkspace
       currentUserId={activeAccount.id}
@@ -335,6 +338,7 @@ export default function HomePage() {
     <AppShell account={activeAccount} route={route} onNavigate={navigateWithinApp} onLogout={logout}>
       {systemMessage && <StatusMessage message={systemMessage} tone="error" />}
       {profileGateMessage && <StatusMessage message={profileGateMessage} tone="error" />}
+      <NavigationPromptHost />
       <div className="route-view" key={`${route}-${viewRevision}`}>{content}</div>
     </AppShell>
   );
@@ -356,7 +360,7 @@ function AuthPage({
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [bootstrapSecret, setBootstrapSecret] = useState('');
-  const [message, setMessage] = useState(initialMessage);
+  const [message, setMessage, messageRevision] = useFeedback(initialMessage);
   const [tone, setTone] = useState<'success' | 'error' | 'info'>(initialMessage ? 'error' : 'info');
   const [busy, setBusy] = useState(false);
   const [bootstrapRequired, setBootstrapRequired] = useState(false);
@@ -424,7 +428,7 @@ function AuthPage({
           {mode !== 'forget' && <Field label="密码" required><input type="password" minLength={8} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} required /></Field>}
           {mode === 'register' && <Field label="确认密码" required><input type="password" minLength={8} maxLength={128} value={confirm} onChange={(event) => setConfirm(event.target.value)} required /></Field>}
           {mode === 'register' && bootstrapRequired && <Field label="首次设置密钥" required><input type="password" minLength={16} maxLength={256} value={bootstrapSecret} onChange={(event) => setBootstrapSecret(event.target.value)} required /></Field>}
-          <StatusMessage message={message} tone={tone} />
+          <StatusMessage message={message} tone={tone} eventId={messageRevision} />
           <button className="primary-button primary-button--large" type="submit" disabled={busy}>
             {busy ? '处理中…' : mode === 'login' ? '登陆' : mode === 'register' ? '注册' : '查看恢复方式'}
           </button>

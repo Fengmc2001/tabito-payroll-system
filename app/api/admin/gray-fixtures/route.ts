@@ -5,6 +5,7 @@ import {
   json,
   requireSession,
 } from '../../../lib/server/payroll-store';
+import { grayRetirementPlan } from '../../../lib/gray-retirement';
 import { BOOTSTRAP_ADMIN_EMAIL, DEFAULT_DEPARTMENTS } from '../../../lib/payroll';
 
 const GRAY_STAGE = 'gray';
@@ -34,21 +35,6 @@ type ManifestEntity = {
   type?: unknown;
   id?: unknown;
 };
-
-const TABLES_TO_CLEAR = [
-  'payroll_seed_entities',
-  'payroll_recurring_instances',
-  'payroll_recurring_rules',
-  'payroll_salary_batches',
-  'payroll_file_references',
-  'payroll_salary_records',
-  'payroll_files',
-  'payroll_audit_logs',
-  'payroll_sessions',
-  'payroll_settings',
-  'payroll_departments',
-  'payroll_users',
-] as const;
 
 export async function GET(request: Request) {
   try {
@@ -134,29 +120,12 @@ export async function DELETE(request: Request) {
       .first<{ value: string }>();
     if (!clearPlan) throw new ApiError(409, '灰度附件清除计划已丢失。');
 
-    // Recreate the few structural defaults needed for the fixed first-admin
-    // bootstrap flow after all gray business data has been removed.
-    // The retirement flag is one-way for this D1: even if DEPLOYMENT_STAGE stays
-    // gray, the destructive maintenance endpoint disappears after this batch.
     const now = new Date().toISOString();
-    await db.batch([
-      ...TABLES_TO_CLEAR.map((table) => db.prepare(`DELETE FROM ${table}`)),
-      db.prepare(`INSERT INTO payroll_settings (key, value, updated_by, updated_at)
-        VALUES ('registration_open', '1', NULL, ?)`).bind(now),
-      db.prepare(`INSERT INTO payroll_settings (key, value, updated_by, updated_at)
-        VALUES (?, '1', NULL, ?)`).bind(GRAY_RETIRED_SETTING, now),
-      ...DEFAULT_DEPARTMENTS.map((department, index) => db.prepare(`INSERT INTO payroll_departments
-        (id, label, active, sort_order, created_at, updated_at, deleted_at)
-        VALUES (?, ?, 1, ?, ?, ?, NULL)`)
-        .bind(department.key, department.label, index, now, now)),
-      // Keep the terminal plan as a one-way generation marker. New requests
-      // can distinguish the post-clear database generation, while any request
-      // that started before the clear cannot silently write into the new one.
-      db.prepare(`INSERT INTO payroll_settings (key, value, updated_by, updated_at)
-        VALUES (?, ?, NULL, ?)`).bind(GRAY_CLEAR_PLAN_SETTING, clearPlan.value, now),
-    ]);
-
-    await requireEmptyGrayBusinessTables();
+    const results = await db.batch(grayRetirementPlan(now, clearPlan.value, DEFAULT_DEPARTMENTS)
+      .map(({ sql, params }) => db.prepare(sql).bind(...params)));
+    if (!results.at(-1)?.meta.changes) {
+      throw new ApiError(409, '灰度数据已由另一项操作清除，请刷新后确认初始化状态。');
+    }
 
     return noStoreJson({
       ok: true,
@@ -169,16 +138,6 @@ export async function DELETE(request: Request) {
     });
   } catch (error) {
     return errorResponse(error);
-  }
-}
-
-async function requireEmptyGrayBusinessTables() {
-  const db = requiredDatabase();
-  const tables = TABLES_TO_CLEAR.filter((table) => !['payroll_settings', 'payroll_departments'].includes(table));
-  const results = await db.batch(tables.map((table) => db.prepare(`SELECT COUNT(*) AS count FROM ${table}`)));
-  const residual = tables.filter((_, index) => resultCount(results[index]) !== 0);
-  if (residual.length > 0) {
-    throw new ApiError(500, `灰度数据清除后仍有业务数据残留：${residual.join('、')}。`);
   }
 }
 

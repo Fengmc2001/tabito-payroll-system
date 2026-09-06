@@ -21,6 +21,8 @@ jobs:
       - run: npm run lint
       - run: npx tsc --noEmit
       - run: npm run self-check:logic
+      - run: npm run self-check:audit-fixes
+      - run: npm run self-check:deployment
       - run: npm run self-check:delegated-ui
       - run: npm audit --omit=dev
       - name: Prepare disposable local D1

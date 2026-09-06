@@ -566,6 +566,25 @@ assert(accountAudit.data.overview.accountLogs.some((log) => log.action === 'sala
   && log.targetId === recurringRule.id
   && log.detail.businessMonth === recurringNextMonth), 'account-month audit lookup finds system-generated recurring activity');
 
+const draftOnlyBatch = {
+  ...recurringBatch,
+  requestId: `batch-request-${unique}-incomplete-profile-draft`,
+  targetUserId: employee.id,
+  submit: false,
+  template: { ...recurringBatch.template, id: randomUUID(), userId: employee.id },
+};
+const draftRuleCreate = await request('/api/staff/payroll/batches', {
+  method: 'POST', cookie: reviewerSession.cookie, body: draftOnlyBatch,
+});
+expectStatus(draftRuleCreate, 201, 'incomplete-profile employee can receive a recurring draft rule');
+const draftRun = await request('/api/staff/payroll/rules/run', {
+  method: 'POST', cookie: reviewerSession.cookie, body: { month: recurringNextMonth, targetUserId: employee.id },
+});
+expectStatus(draftRun, 200, 'recurring drafts do not require a complete submission profile');
+assert(draftRun.data.errors.length === 0 && draftRun.data.generatedRecords === 3, 'next month draft generation uses the same readiness rule as manual draft creation');
+const draftMonthRecords = await proxyRecords(reviewerSession.cookie, employee.id, recurringNextMonth);
+assert(draftMonthRecords.length === 3 && draftMonthRecords.every((record) => record.status === 1), 'automatically generated incomplete-profile records remain unsubmitted');
+
 process.stdout.write(`${JSON.stringify({ result: 'PASS', checks: checks.length }, null, 2)}\n`);
 
 async function assertEmployeeForbiddenMatrix({ employeeCookie, target, record, batch, rule }) {
@@ -808,6 +827,11 @@ function assert(condition, message) {
 }
 
 async function request(path, options = {}) {
+  // Sequential fixture saves use a fresh version; concurrency cases pass an explicit snapshot.
+  if (options.method === 'PATCH' && options.body?.profile && !Object.hasOwn(options.body, 'expectedProfileVersion')) {
+    const snapshot = await request(path, { cookie: options.cookie });
+    options = { ...options, body: { ...options.body, expectedProfileVersion: snapshot.data.account?.profileVersion } };
+  }
   const headers = new Headers();
   if (options.cookie) headers.set('cookie', options.cookie);
   if (options.body !== undefined) headers.set('content-type', 'application/json');

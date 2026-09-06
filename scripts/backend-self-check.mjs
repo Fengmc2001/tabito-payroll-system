@@ -426,6 +426,60 @@ await expect(`/api/users/${secondUser.id}`, 403, 'employee cannot update another
 });
 
 const salaryId = `salary-${randomUUID()}`;
+for (const bankType of ['cn-bank', 'alipay']) {
+  const otherPayee = { ...profile, bankType, payeeIsSelf: '否', payeeName: '测试代收人', payeeIdNumber: '001234' };
+  await expect(`/api/users/${employee.id}`, 200, 'other payee profile can be saved', {
+    method: 'PATCH', cookie: employeeCookie, body: { profile: otherPayee },
+  });
+  const selfPayee = await request(`/api/users/${employee.id}`, {
+    method: 'PATCH', cookie: employeeCookie, body: { profile: { ...otherPayee, payeeIsSelf: '是' } },
+  });
+  expectStatus(selfPayee, 200, 'self payee profile can be saved');
+  assert(selfPayee.data.account.profile.payeeName === '' && selfPayee.data.account.profile.payeeIdNumber === '', 'self payment removes stale other-payee fields');
+}
+await expect(`/api/users/${employee.id}`, 400, 'passport rejects more than one attachment', {
+  method: 'PATCH', cookie: employeeCookie, body: { profile: { ...profile, idFileNames: [bankFileKey, bankFileKey] } },
+});
+await expect(`/api/users/${employee.id}`, 200, 'Japan payment ignores an inapplicable non-self flag', {
+  method: 'PATCH', cookie: employeeCookie, body: { profile: { ...profile, payeeIsSelf: '否', payeeName: '' } },
+});
+const profileSnapshot = (await request(`/api/users/${employee.id}`, { cookie: employeeCookie })).data.account;
+const profileA = await request(`/api/users/${employee.id}`, {
+  method: 'PATCH', cookie: employeeCookie,
+  body: { profile: { ...profileSnapshot.profile, bankAccountNumber: 'TEST-ONLY-NEW-ACCOUNT' }, expectedProfileVersion: profileSnapshot.profileVersion },
+});
+expectStatus(profileA, 200, 'first profile snapshot can update payment account');
+await expect(`/api/users/${employee.id}`, 409, 'stale phone edit cannot overwrite the newly saved payment account', {
+  method: 'PATCH', cookie: employeeCookie,
+  body: { profile: { ...profileSnapshot.profile, tel: 'TEST-ONLY-OLD-PAGE' }, expectedProfileVersion: profileSnapshot.profileVersion },
+});
+const latestProfile = (await request(`/api/users/${employee.id}`, { cookie: employeeCookie })).data.account;
+assert(latestProfile.profile.bankAccountNumber === 'TEST-ONLY-NEW-ACCOUNT', 'new bank account survives rejected stale save');
+await expect(`/api/users/${employee.id}`, 400, 'missing profile version cannot silently overwrite data', {
+  method: 'PATCH', cookie: employeeCookie, body: { profile: profileSnapshot.profile, expectedProfileVersion: undefined },
+});
+const concurrentProfiles = await Promise.all(['TEST-ONLY-A', 'TEST-ONLY-B'].map((tel) => request(`/api/users/${employee.id}`, {
+  method: 'PATCH', cookie: employeeCookie,
+  body: { profile: { ...latestProfile.profile, tel }, expectedProfileVersion: latestProfile.profileVersion },
+})));
+assert(concurrentProfiles.filter((result) => result.status === 200).length === 1 && concurrentProfiles.filter((result) => result.status === 409).length === 1, 'exactly one simultaneous profile edit succeeds');
+const refreshedTargets = await request('/api/staff/payroll/users', { cookie: adminCookie });
+expectStatus(refreshedTargets, 200, 'staff can refresh employee readiness');
+assert(refreshedTargets.data.users.find((user) => user.id === employee.id).profileReady, 'hidden payee field no longer blocks payroll');
+await expect(`/api/users/${employee.id}`, 200, 'restore the fixture payment profile', {
+  method: 'PATCH', cookie: employeeCookie, body: { profile },
+});
+for (const currency of ['JPY', 'CNY']) {
+  const exact = await request('/api/salary-records', {
+    method: 'POST', cookie: employeeCookie,
+    body: { ...gateDraft, id: `salary-${randomUUID()}`, currency, applyType: 1, rate: 1800, startTime: '09:00', endTime: '10:05' },
+  });
+  expectStatus(exact, 201, '65-minute salary can be persisted');
+  assert(exact.data.record.finalSalary === 1950, 'server persists the correct integer-minute salary');
+  await expect(`/api/salary-records/${exact.data.record.id}?updatedAt=${encodeURIComponent(exact.data.record.updatedAt)}`, 200, 'remove only the new calculation fixture', {
+    method: 'DELETE', cookie: employeeCookie,
+  });
+}
 const cnySalaryId = `salary-${randomUUID()}`;
 const otherMonthSalaryId = `salary-${randomUUID()}`;
 const otherMonth = new Date(`${workDate}T00:00:00Z`);
@@ -607,6 +661,16 @@ await expect(`/api/salary-records/${salaryId}`, 403, 'other employee cannot over
 });
 await expect(`/api/files?key=${encodeURIComponent(fileKey)}`, 403, 'other employee cannot read the attachment', { cookie: secondCookie });
 
+for (const body of [{ month: { value: '2030-01' } }, {}, null, [], { month: '' }, { month: 202609 }, { month: '2026-13' }]) {
+  await expect(`/api/salary-records/apply/${employee.id}`, 400, 'invalid month body cannot submit drafts', {
+    method: 'POST', cookie: employeeCookie, body,
+  });
+}
+await expect(`/api/salary-records/apply/${employee.id}`, 400, 'malformed JSON cannot submit drafts', {
+  method: 'POST', cookie: employeeCookie, rawBody: '{',
+});
+const recordsAfterInvalidApply = await request(`/api/salary-records?userId=${employee.id}`, { cookie: employeeCookie });
+assert(recordsAfterInvalidApply.data.records.some((record) => record.status === 1), 'invalid apply requests leave drafts unsubmitted');
 const applied = await request(`/api/salary-records/apply/${employee.id}`, {
   method: 'POST', cookie: employeeCookie, body: { month: workDate.slice(0, 7) },
 });
@@ -909,13 +973,18 @@ function assert(condition, message) {
 }
 
 async function request(path, options = {}) {
+  // Sequential fixture saves use a fresh version; concurrency cases pass an explicit snapshot.
+  if (options.method === 'PATCH' && options.body?.profile && !Object.hasOwn(options.body, 'expectedProfileVersion')) {
+    const snapshot = await request(path, { cookie: options.cookie });
+    options = { ...options, body: { ...options.body, expectedProfileVersion: snapshot.data.account?.profileVersion } };
+  }
   const headers = new Headers(options.headers || {});
   if (options.cookie) headers.set('cookie', options.cookie);
   if (options.body !== undefined) headers.set('content-type', 'application/json');
   const response = await fetch(`${baseUrl}${path}`, {
     method: options.method || 'GET',
     headers,
-    body: options.formData || (options.body === undefined ? undefined : JSON.stringify(options.body)),
+    body: options.rawBody ?? options.formData ?? (options.body === undefined ? undefined : JSON.stringify(options.body)),
     redirect: 'manual',
   });
   if (options.raw) return { status: response.status, data: null, headers: response.headers };

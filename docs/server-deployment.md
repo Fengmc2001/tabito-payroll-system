@@ -31,13 +31,25 @@ D1 命令会输出一个 UUID。打开根目录 `wrangler.jsonc`，把下列占�
 
 替换为刚创建的 D1 `database_id`。不要改变绑定名 `DB` 和 `FILES`，服务端代码使用这两个名称。R2 存储桶应保持私有，不需要启用 `r2.dev` 或 R2 公开域名。
 
-## 3. 执行数据库迁移
+## 3. 预先配置初始化密钥
+
+在首次发布前，为同名 Worker 配置至少 16 个字符的随机密钥：
+
+```bash
+npx wrangler secret put BOOTSTRAP_SECRET --config wrangler.jsonc
+```
+
+若 Wrangler 提示 Worker 尚不存在，确认创建该 Worker 后继续设置密钥。这个密钥不是账号密码；不要提交到 GitHub。首次注册会由后端校验密钥的实际长度和值，长度不足或不匹配都会拒绝初始化。
+
+发布脚本需要部署机环境变量 `CLOUDFLARE_ACCOUNT_ID` 和 `CLOUDFLARE_API_TOKEN`。Token 仅授权目标 Cloudflare 账号，需具备 Worker 发布/读取设置、D1 读写、R2 对象读写，以及绑定域名所需权限。通过系统或 CI 的秘密管理配置，不要写进代码或命令记录。脚本会核对 Worker 当前绑定与本地配置，目标不一致即中止。
+
+### 数据库迁移
 
 ```bash
 npm run db:migrate:remote
 ```
 
-该命令对 `tabito-payroll-db` 执行 `drizzle/` 内尚未应用的 SQL 迁移。新版本上线时也要先执行此命令。服务端启动后只会做一次只读的最新 schema 探测；如果未迁移到最新版本，接口会明确拒绝服务，不会在业务请求中自动建表或回填数据。
+该命令仅执行 schema 迁移，不清空业务数据。正常发布脚本会自动在确认及构建成功后执行迁移，不必重复执行。服务端启动后只会做一次只读的最新 schema 探测；如果未迁移到最新版本，接口会明确拒绝服务，不会在业务请求中自动建表或回填数据。
 
 ## 4. 构建与部署 Worker
 
@@ -47,11 +59,31 @@ npx tsc --noEmit
 npm run deploy:cloudflare
 ```
 
-`deploy:cloudflare` 会先执行生产构建，再使用生成的 `dist/server/wrangler.json` 发布 Worker 与前端静态资源。命令完成后会输出一个 `workers.dev` HTTPS 地址。
+本版本第一次向该数据库发布时，脚本显示明确的目标 Worker、D1 ID、R2 桶与清理范围，并要求：
+
+> 请提前备份数据库和附件。第一次正式登陆该系统、服务器尚无旧数据时，不需要备份服务器。已备份（或首次上线无需备份）并确认继续？(y/n，默认 n)
+
+只有输入 `y` 才开始服务器变更；`n`、空输入或非交互执行都会中止首次重置，没有自动确认开关。备份提醒不是自动备份：有旧数据时，必须先导出数据库和附件并确认能够恢复。
+
+流程为：构建 → 迁移 → 获得部署锁 → 冻结业务表写入 → 发布维护页、停止定时规则 → 删除该桶 `payroll/` 下全部附件（含未引用上传）→ 原子清空工资系统业务表并恢复默认部门/开放注册 → 核对空库与附件 → 发布程序 → 解除冻结。清理不删除服务器文件、Cloudflare 其他数据库、其他对象前缀或 Worker Secrets。
+
+清理完成后，旧账号和旧会话全部失效。第一个账号固定为 `TabitoAdimin01@tabitoedu.com`，仍须提交预设 `BOOTSTRAP_SECRET` 并自行设置密码。
+
+一次性标记 `production_reset_20260906_v1` 保存在该服务器 D1 中。后续运行同一发布命令只更新程序和迁移，不再删除正式数据。不要人为删除该标记，也不要绕过脚本手动部署本版本。根目录本地启动/构建命令完全不触发清空。
+
+发布失败时，系统保持写入冻结或维护页；先确认前一个部署进程已退出，再修复报错并运行：
+
+```bash
+npm run deploy:cloudflare -- --resume
+```
+
+恢复操作仍需交互确认。若业务数据已经清空，恢复只继续核验和发布，不再重复清空。不要同时运行两个恢复进程。不要仅回滚代码就认为资料可恢复；删除的资料只能从事先备份恢复。
+
+命令完成后会输出 Worker 的 HTTPS 地址。本流程针对本仓库的 Workers + D1 + R2 架构；自行维护的 Next/Node、Nginx 或其他 SQLite 部署适配层，不能假定会自动执行这一脚本，必须先接入同等发布步骤再上线。
 
 `wrangler.jsonc` 已配置四个每日定时触发点，用于分页处理到期的工资定期规则。Cloudflare 按 UTC 解释 Cron；当前四次触发对应日本时间每日 00:05、00:20、00:35、00:50。每个规则和月份都有唯一实例，多次触发不会重复生成工资。
 
-首次部署完成后，为该 Worker 配置一个至少 16 个字符的随机初始化密钥：
+如需更换初始化密钥，可重新执行：
 
 ```bash
 npx wrangler secret put BOOTSTRAP_SECRET --config wrangler.jsonc
@@ -143,10 +175,12 @@ Worker 会为登录、注册和全部已登录写操作校验浏览器 `Origin` 
 
 ## 9. 更新、备份与回滚
 
-- 上线新代码前先备份 D1，再执行 `npm run db:migrate:remote`。
+- 第一次发布本版本：必须先备份旧 D1 和附件，再交互执行 `npm run deploy:cloudflare` 确认一次性清空。首次空服务器无需备份。
+- 该数据库完成一次性重置后，后续更新仍建议先备份，再执行同一发布命令；正式数据保持不变。
+- 本地演示数据库与附件不会被服务器发布命令操作。
 - 数据库迁移是向前的；代码回滚不等于数据库回滚。
 - R2 保留员工证件和银行资料，应在 Cloudflare 账号中配置适合公司的保留期、管理员 MFA 与账号权限。
 
 ## 10. CI 自动部署（可选）
 
-仓库默认 CI 只执行检查，不会擅自改动生产环境。现有 CI 中的 `CI-Only-Bootstrap-2026!` 只用于当次一次性本地 D1，不是生产密钥。如需在 GitHub Actions 自动部署，可在仓库 Secrets 配置 `CLOUDFLARE_API_TOKEN` 与 `CLOUDFLARE_ACCOUNT_ID`，然后在工作流中显式调用 `npm run db:migrate:remote` 和 `npm run deploy:cloudflare`。生产 `BOOTSTRAP_SECRET` 仍应在 Cloudflare 中通过 `wrangler secret put` 独立管理，不要复用 CI 示例值。
+仓库默认 CI 只执行检查，不会擅自改动生产环境。现有 CI 中的 `CI-Only-Bootstrap-2026!` 只用于当次一次性本地 D1，不是生产密钥。第一次重置禁止 CI 自动执行，必须由部署者在交互终端确认。完成后如需 GitHub Actions 自动更新，可在仓库 Secrets 配置 `CLOUDFLARE_API_TOKEN` 与 `CLOUDFLARE_ACCOUNT_ID`，再显式调用 `npm run deploy:cloudflare`；脚本只在服务器存在本次重置的完成标记时允许无交互更新。生产 `BOOTSTRAP_SECRET` 仍应在 Cloudflare 中通过 `wrangler secret put` 独立管理，不要复用 CI 示例值。

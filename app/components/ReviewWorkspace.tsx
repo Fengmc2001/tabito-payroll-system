@@ -1,6 +1,9 @@
 'use client';
 
+import { appPath } from '../lib/app-path';
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useFeedback } from './interaction-guards';
 import { ApiClientError, apiRequest } from '../lib/api-client';
 import {
   AuditLogItem,
@@ -28,7 +31,7 @@ export function ReviewWorkspace() {
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState('');
-  const [message, setMessage] = useState('');
+  const [message, setMessage, feedbackRevision] = useFeedback();
   const [tone, setTone] = useState<'success' | 'error' | 'info'>('info');
   const requestRevision = useRef(0);
 
@@ -55,7 +58,7 @@ export function ReviewWorkspace() {
     } finally {
       if (requestRevision.current === revision) setLoading(false);
     }
-  }, []);
+  }, [setMessage]);
 
   useEffect(() => {
     const revision = requestRevision.current + 1;
@@ -78,7 +81,7 @@ export function ReviewWorkspace() {
       if (requestRevision.current === revision) setLoading(false);
     });
     return () => { requestRevision.current += 1; };
-  }, []);
+  }, [setMessage]);
 
   const accountOptions = useMemo(() => {
     const users = new Map<string, ReviewSalaryItem['user']>();
@@ -181,7 +184,7 @@ export function ReviewWorkspace() {
         ))}
       </div>
 
-      <StatusMessage message={message} tone={tone} />
+      <StatusMessage message={message} eventId={feedbackRevision} tone={tone} />
 
       {loading ? <div className="empty-state">正在加载审核队列…</div> : visibleItems.length === 0 ? (
         <div className="empty-state">{selectedUserId ? '该账号在当前月份与状态下没有工资记录。' : '当前月份与状态下没有工资记录。'}</div>
@@ -211,7 +214,7 @@ export function ReviewWorkspace() {
                 </dl>
                 {record.workContent && <p className="review-card__work-content"><b>工作内容</b><span>{record.workContent}</span></p>}
                 {record.attachments.length > 0 && <div className="attachment-links"><b>工资附件</b>{record.attachments.map((key, index) => (
-                  <a key={key} href={`/api/files?key=${encodeURIComponent(key)}`} target="_blank" rel="noreferrer">附件 {index + 1}</a>
+                  <a key={key} href={appPath(`/api/files?key=${encodeURIComponent(key)}`)} target="_blank" rel="noreferrer">附件 {index + 1}</a>
                 ))}</div>}
                 <details className="review-card__details">
                   <summary>申报信息 · {salarySourceLabel(record.source)}</summary>

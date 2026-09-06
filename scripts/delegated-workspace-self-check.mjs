@@ -56,7 +56,7 @@ check(
 );
 check(
   employeeSource.includes('setDetailRevision((current) => current + 1)')
-    && employeeSource.includes('[detailRevision, month, selectedId]')
+    && employeeSource.includes('[detailRevision, month, selectedId, setMessage]')
     && !employeeSource.includes('await loadDetail(selectedId)'),
   '员工目录刷新与账号切换统一由可取消的详情请求处理',
 );

@@ -30,7 +30,7 @@ export function AuditTrailPanel({ logs, title = '最近后台与业务操作' }:
           {logs.map((log) => (
             <article key={log.id}>
               <div><strong>{auditActionLabel(log.action)}</strong><span>{log.actorDisplayName || log.actorEmail || '系统'}</span></div>
-              <div><span>{auditTargetLabel(log.targetType)}</span><time>{new Date(log.createdAt).toLocaleString('zh-CN')}</time></div>
+              <div><span>{auditTargetLabel(log.targetType)}</span><time title="日本时间">{new Date(log.createdAt).toLocaleString('zh-CN', { timeZone: 'Asia/Tokyo' })}</time></div>
             </article>
           ))}
         </div>

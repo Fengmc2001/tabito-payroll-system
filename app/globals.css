@@ -61,6 +61,17 @@ select {
 
 textarea { min-height: 88px; resize: vertical; }
 
+.form-operation-fields { min-width: 0; margin: 0; border: 0; padding: 0; }
+.form-operation-fields:disabled { cursor: progress; }
+.file-picker input:focus-visible + .file-picker__button { outline: 3px solid var(--xly-blue); outline-offset: 3px; }
+.file-picker input:disabled + .file-picker__button { opacity: .6; cursor: progress; }
+@media (min-width: 901px) and (max-width: 1400px) {
+  .app-shell:has(.transfer-workspace) { grid-template-columns: 190px minmax(0, 1fr); }
+  .app-shell:has(.transfer-workspace) .app-sidebar { width: 190px; padding-left: 12px; padding-right: 12px; }
+  .app-shell:has(.transfer-workspace) .app-content { width: calc(100% - 24px); }
+  .transfer-workspace { padding: 24px 18px; }
+}
+
 input:focus,
 textarea:focus,
 select:focus {
@@ -903,13 +914,13 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
 .transfer-sheet__summary > span { border: 1px solid #d8e0ee; border-radius: 5px; padding: 8px 11px; color: #5a6882; background: #f8faff; font-size: 12px; }
 .transfer-sheet__summary b { color: var(--xly-navy-deep); }
 .transfer-table-wrap { max-height: min(68vh, 720px); border-color: #cfd5df; border-radius: 2px; }
-.transfer-table { width: 100%; min-width: 0; table-layout: fixed; font-size: 10.5px; }
+.transfer-table { width: 100%; min-width: 960px; table-layout: fixed; font-size: .8125rem; }
 .transfer-table th,
 .transfer-table td { border-right: 1px solid #d9dee7; padding: 7px 6px; line-height: 1.35; overflow-wrap: anywhere; }
-.transfer-table th { position: sticky; z-index: 2; top: 0; color: #38445a; background: #edf0f4; font-size: 10px; }
+.transfer-table th { position: sticky; z-index: 2; top: 0; color: #38445a; background: #edf0f4; font-size: .8125rem; }
 .transfer-table th:last-child,
 .transfer-table td:last-child { border-right: 0; }
-.transfer-table td:first-child strong { display: block; color: var(--xly-navy-deep); font-size: 11px; }
+.transfer-table td:first-child strong { display: block; color: var(--xly-navy-deep); font-size: .875rem; }
 .transfer-table th:nth-child(1) { width: 8%; }
 .transfer-table th:nth-child(2) { width: 11%; }
 .transfer-table th:nth-child(3) { width: 8%; }
@@ -927,12 +938,12 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
 .transfer-table__institution--cn-bank { color: #a33d37 !important; background: #fff1f0; }
 .transfer-table__institution--alipay { color: #8a6416 !important; background: #fff8df; }
 .transfer-pdf-links { display: grid; gap: 3px; }
-.transfer-pdf-links a { display: inline-flex; align-items: center; gap: 3px; color: var(--xly-blue); font-size: 10px; text-decoration: none; white-space: nowrap; }
+.transfer-pdf-links a { display: inline-flex; align-items: center; gap: 3px; color: var(--xly-blue); font-size: .75rem; text-decoration: none; white-space: nowrap; }
 .transfer-pdf-links svg { flex: 0 0 auto; margin-top: 1px; }
 .transfer-pdf-links a:hover { text-decoration: underline; }
 .transfer-table .currency-totals { gap: 2px; }
-.transfer-table .currency-totals > span { align-items: flex-start; flex-direction: column; gap: 0; font-size: 10px; white-space: normal; }
-.transfer-table .currency-code { font-size: 9px !important; }
+.transfer-table .currency-totals > span { align-items: flex-start; flex-direction: column; gap: 0; font-size: .8125rem; white-space: normal; }
+.transfer-table .currency-code { font-size: .75rem !important; }
 .muted-text { color: var(--xly-muted); }
 .button-with-icon { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
 
@@ -1094,7 +1105,7 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
   .employee-directory button { flex: 0 0 190px; }
   .employee-profile-card dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .audit-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .transfer-table { min-width: 900px; }
+  .transfer-table { min-width: 960px; }
   .payroll-route__header { align-items: flex-start; flex-direction: column; }
   .form-grid--three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .recurring-rule-card { grid-template-columns: minmax(0, 1fr) auto; }

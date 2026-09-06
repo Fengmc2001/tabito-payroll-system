@@ -26,8 +26,10 @@ import {
   getApplyTypeLabel,
   getDepartmentLabel,
   monthDateRange,
+  monthIsValid,
   recalculateRecord,
 } from '../lib/payroll';
+import { useFeedback, useUnsavedChanges, confirmPageLeave } from './interaction-guards';
 import { CurrencyAmountsView, Money } from './payroll-ui';
 import { Field, FormSection, StatusMessage, invalidFormControlMessage } from './form-controls';
 import {
@@ -73,7 +75,7 @@ export function DelegatedSalaryWorkspace({
   const [departments, setDepartments] = useState<DepartmentOption[]>([]);
   const [workManagers, setWorkManagers] = useState<WorkManagerOption[]>([]);
   const [editing, setEditing] = useState<SalaryRecord | null>(null);
-  const [notice, setNotice] = useState('');
+  const [notice, setNotice, noticeRevision] = useFeedback();
   const [noticeTone, setNoticeTone] = useState<'success' | 'error' | 'info'>('info');
   const [busy, setBusy] = useState(false);
   const [initialized, setInitialized] = useState(false);
@@ -122,7 +124,7 @@ export function DelegatedSalaryWorkspace({
       }
     });
     return () => { cancelled = true; };
-  }, [currentUserId, updateSelection]);
+  }, [currentUserId, updateSelection, setNotice]);
 
   const fetchTargetData = useCallback(async (selection: DelegatedSelection) => {
     if (!selection.targetUserId) {
@@ -141,10 +143,17 @@ export function DelegatedSalaryWorkspace({
     const revision = ++requestRevision.current;
     if (!quiet) setBusy(true);
     try {
-      const result = await fetchTargetData(selection);
+      const [result, userResult, optionResult] = await Promise.all([
+        fetchTargetData(selection),
+        apiRequest<{ users: ManagedUser[] }>('/api/staff/payroll/users'),
+        apiRequest<{ departments: DepartmentOption[]; workManagers: WorkManagerOption[] }>('/api/payroll-options'),
+      ]);
       if (requestRevision.current !== revision || selectionRef.current.revision !== selection.revision) return false;
       setRecords(result.records);
       setRules(result.rules);
+      setUsers(userResult.users.filter((user) => user.id !== currentUserId));
+      setDepartments(optionResult.departments);
+      setWorkManagers(optionResult.workManagers);
       if (!quiet) {
         setNoticeTone('success');
         setNotice(`${selection.month} 的记录已刷新。`);
@@ -159,7 +168,7 @@ export function DelegatedSalaryWorkspace({
     } finally {
       if (!quiet) setBusy(false);
     }
-  }, [fetchTargetData]);
+  }, [fetchTargetData, currentUserId, setNotice]);
 
   useEffect(() => {
     const selection = selectionRef.current;
@@ -173,11 +182,14 @@ export function DelegatedSalaryWorkspace({
       setNoticeTone('error');
       setNotice(messageFrom(error));
     });
-  }, [fetchTargetData, month, targetUserId]);
+  }, [fetchTargetData, month, targetUserId, setNotice]);
 
-  const changeMonth = (value: string) => {
+  const changeMonth = async (value: string) => {
     if (busy) return;
     const nextMonth = value || naturalMonth;
+    if (!monthIsValid(nextMonth)) { setNoticeTone('error'); setNotice('请选择有效月份。'); return; }
+    if (nextMonth === month) return;
+    if (!await confirmPageLeave()) return;
     updateSelection({ month: nextMonth });
     setMonth(nextMonth);
     setRecords([]);
@@ -185,8 +197,8 @@ export function DelegatedSalaryWorkspace({
     setEditing(null);
   };
 
-  const changeTarget = (value: string) => {
-    if (busy) return;
+  const changeTarget = async (value: string) => {
+    if (busy || value === targetUserId || !await confirmPageLeave()) return;
     updateSelection({ targetUserId: value });
     setTargetUserId(value);
     setRecords([]);
@@ -276,6 +288,7 @@ export function DelegatedSalaryWorkspace({
       records={records}
       busy={busy}
       notice={notice}
+      noticeRevision={noticeRevision}
       noticeTone={noticeTone}
       onRefresh={() => void refreshTarget()}
       onNew={newRecord}
@@ -299,6 +312,7 @@ export function DelegatedSalaryWorkspace({
       isSelectionCurrent={isSelectionCurrent}
       busy={busy}
       notice={notice}
+      noticeRevision={noticeRevision}
       noticeTone={noticeTone}
       setBusy={setBusy}
       setNotice={setNotice}
@@ -308,6 +322,7 @@ export function DelegatedSalaryWorkspace({
     {editing && <SalaryRecordDialog
       key={editing.id}
       initial={editing}
+      busy={busy}
       title={`为 ${target?.displayName ?? '他人'} ${records.some((item) => item.id === editing.id) ? '编辑' : '新增'}工资`}
       month={month}
       departments={departments}
@@ -315,7 +330,7 @@ export function DelegatedSalaryWorkspace({
       allowDirectSubmit
       directSubmitDisabled={!target?.profileReady || target.status !== 'active'}
       onClose={() => setEditing(null)}
-      onSave={(record, submit) => void saveSingle(record, Boolean(submit))}
+      onSave={(record, submit) => saveSingle(record, Boolean(submit))}
       onUpload={uploadForTarget}
     />}
   </section>;
@@ -331,6 +346,7 @@ function SingleWorkspace({
   records,
   busy,
   notice,
+  noticeRevision,
   noticeTone,
   onRefresh,
   onNew,
@@ -347,6 +363,7 @@ function SingleWorkspace({
   records: SalaryRecord[];
   busy: boolean;
   notice: string;
+  noticeRevision: number;
   noticeTone: 'success' | 'error' | 'info';
   onRefresh: () => void;
   onNew: () => void;
@@ -364,7 +381,7 @@ function SingleWorkspace({
       <div><h2 className="workspace-panel-title">他人单条申报</h2></div>
       <div className="heading-actions">
         <TargetPicker users={users} value={targetUserId} onChange={setTargetUserId} disabled={busy} />
-        <label className="month-picker"><span>申报月份</span><input type="month" value={month} disabled={busy} onChange={(event) => setMonth(event.target.value || currentMonth())} /></label>
+        <label className="month-picker"><span>申报月份</span><input type="month" value={month} disabled={busy} onBlur={(event) => { event.currentTarget.value = month; }} onChange={(event) => { const next = event.target.value || currentMonth(); event.target.value = month; setMonth(next); }} /></label>
         <button type="button" className="secondary-button button-with-icon" disabled={busy || !targetUserId} onClick={onRefresh}><RefreshCw size={15} />刷新</button>
         <button type="button" className="primary-button" disabled={busy || !target || target.status !== 'active'} onClick={onNew}>+新增一条</button>
       </div>
@@ -373,7 +390,7 @@ function SingleWorkspace({
       tone="error"
       message={target.status !== 'active' ? '该账号已停用，只能查看历史记录。' : '该员工的收款资料尚未完成，可保存草稿，暂不能提交审核。'}
     />}
-    <StatusMessage message={notice} tone={noticeTone} />
+    <StatusMessage message={notice} tone={noticeTone} eventId={noticeRevision} />
     <div className="summary-grid summary-grid--five">
       <SummaryCard label={`${month} 全部记录`} value={<CurrencyAmountsView amounts={summary.total} />} />
       <SummaryCard label="未提交" value={<CurrencyAmountsView amounts={summary.draft} />} tone="draft" />
@@ -409,6 +426,7 @@ function BatchWorkspace({
   isSelectionCurrent,
   busy,
   notice,
+  noticeRevision,
   noticeTone,
   setBusy,
   setNotice,
@@ -430,13 +448,14 @@ function BatchWorkspace({
   isSelectionCurrent: (revision: number) => boolean;
   busy: boolean;
   notice: string;
+  noticeRevision: number;
   noticeTone: 'success' | 'error' | 'info';
   setBusy: (value: boolean) => void;
   setNotice: (value: string) => void;
   setNoticeTone: (value: 'success' | 'error' | 'info') => void;
   refreshTarget: (quiet?: boolean, expectedSelectionRevision?: number) => Promise<boolean>;
 }) {
-  const range = monthDateRange(month)!;
+  const range = monthDateRange(month) ?? monthDateRange(currentMonth())!;
   const [batchMode, setBatchMode] = useState<PayrollBatchMode>('fixed');
   const [template, setTemplate] = useState(() => defaultTargetRecord(targetUserId, month, departments, workManagers, currentUserId));
   const [fixed, setFixed] = useState<FixedPayrollSchedule>(() => defaultFixedSchedule(month));
@@ -448,6 +467,10 @@ function BatchWorkspace({
   const [ruleTitle, setRuleTitle] = useState('');
   const [ruleEndMonth, setRuleEndMonth] = useState('');
   const [requestId, setRequestId] = useState(() => newBatchRequestId());
+
+  const formSnapshot = JSON.stringify({ template, fixed, calendarSessions, batchMode, submitNow, saveRule, ruleTitle, ruleEndMonth });
+  const [savedSnapshot, setSavedSnapshot] = useState(formSnapshot);
+  useUnsavedChanges(formSnapshot !== savedSnapshot, busy);
 
   const updateTemplate = <K extends keyof SalaryRecord>(field: K, value: SalaryRecord[K]) => {
     setTemplate((current) => {
@@ -508,8 +531,12 @@ function BatchWorkspace({
         method: 'POST',
         body: input,
       });
-      if (!await refreshTarget(true, selectionRevision)) return;
       setRequestId(newBatchRequestId());
+      setSavedSnapshot(formSnapshot);
+      if (!await refreshTarget(true, selectionRevision)) {
+        if (isSelectionCurrent(selectionRevision)) { setNoticeTone('info'); setNotice('工资已保存，但列表刷新失败。请点击刷新核对。'); }
+        return;
+      }
       setNoticeTone('success');
       setNotice(result.replayed
         ? '该批次已处理，未重复生成。'
@@ -567,13 +594,13 @@ function BatchWorkspace({
   const runRules = async () => {
     setBusy(true);
     try {
-      const result = await apiRequest<{ generatedRecords: number; skippedRules: number; errors: unknown[] }>('/api/staff/payroll/rules/run', {
+      const result = await apiRequest<{ generatedRecords: number; skippedRules: number; errors: Array<{ ruleId: string; message: string }> }>('/api/staff/payroll/rules/run', {
         method: 'POST',
         body: { month, targetUserId },
       });
       if (!await refreshTarget(true, selectionRevision)) return;
       setNoticeTone(result.errors.length ? 'error' : 'success');
-      setNotice(`本月新生成 ${result.generatedRecords} 条，已跳过 ${result.skippedRules} 条已执行规律。`);
+      setNotice(`本月新生成 ${result.generatedRecords} 条，已跳过 ${result.skippedRules} 条已执行规律。${result.errors.length ? `失败 ${result.errors.length} 条：${result.errors.map((error) => `${rules.find((rule) => rule.id === error.ruleId)?.title || '自动规律'}：${error.message}`).join('；')}` : ''}`);
     } catch (error) {
       if (isSelectionCurrent(selectionRevision)) {
         setNoticeTone('error');
@@ -590,15 +617,16 @@ function BatchWorkspace({
     <div className="content-card__heading salary-workspace__heading">
       <div><h2 className="workspace-panel-title">他人多条申报</h2></div>
       <div className="heading-actions">
+        <button type="button" className="secondary-button button-with-icon" disabled={busy} onClick={() => void refreshTarget()}><RefreshCw size={15} />刷新</button>
         <TargetPicker users={users} value={targetUserId} onChange={setTargetUserId} disabled={busy} />
-        <label className="month-picker"><span>申报月份</span><input type="month" value={month} disabled={busy} onChange={(event) => setMonth(event.target.value || currentMonth())} /></label>
+        <label className="month-picker"><span>申报月份</span><input type="month" value={month} disabled={busy} onBlur={(event) => { event.currentTarget.value = month; }} onChange={(event) => { const next = event.target.value || currentMonth(); event.target.value = month; setMonth(next); }} /></label>
       </div>
     </div>
     {target && (!target.profileReady || target.status !== 'active') && <StatusMessage
       tone="error"
       message={target.status !== 'active' ? '该账号已停用，不能新增工资。' : '该员工的收款资料尚未完成；可保存草稿，暂不能直接提交审核。'}
     />}
-    <StatusMessage message={notice} tone={noticeTone} />
+    <StatusMessage message={notice} tone={noticeTone} eventId={noticeRevision} />
     <form className="batch-payroll-form" onSubmit={submitBatch} onInvalidCapture={(event) => {
       setNoticeTone('error');
       setNotice(invalidFormControlMessage(event));
@@ -757,7 +785,7 @@ function CalendarSessions({
   sessions: PayrollScheduleSession[];
   onChange: (sessions: PayrollScheduleSession[]) => void;
 }) {
-  const range = monthDateRange(month)!;
+  const range = monthDateRange(month) ?? monthDateRange(currentMonth())!;
   const update = (index: number, values: Partial<PayrollScheduleSession>) => onChange(sessions.map((session, itemIndex) => itemIndex === index ? { ...session, ...values } : session));
   return <div className="calendar-session-list">
     {sessions.map((session, index) => <div className="calendar-session-row" key={index}>
@@ -815,7 +843,7 @@ function defaultTargetRecord(
 }
 
 function defaultFixedSchedule(month: string): FixedPayrollSchedule {
-  const range = monthDateRange(month)!;
+  const range = monthDateRange(month) ?? monthDateRange(currentMonth())!;
   return {
     rangeStart: range.start,
     rangeEnd: range.end,

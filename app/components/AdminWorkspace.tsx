@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, useCallback, useEffect, useState } from 'react';
+import { useFeedback, useModalFocus, useUnsavedChanges, confirmPageLeave } from './interaction-guards';
 import { ApiClientError, apiRequest } from '../lib/api-client';
 import {
   ACCOUNT_STATUS_LABELS,
@@ -22,8 +23,10 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
   const [registrationOpen, setRegistrationOpen] = useState(true);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState('');
+  const [dirtyIds, setDirtyIds] = useState<string[]>([]);
+  useUnsavedChanges(dirtyIds.length > 0 || Boolean(departmentLabel), Boolean(busyId));
   const [resetTarget, setResetTarget] = useState<ManagedUser | null>(null);
-  const [message, setMessage] = useState('');
+  const [message, setMessage, messageRevision] = useFeedback();
   const [tone, setTone] = useState<'success' | 'error' | 'info'>('info');
 
   const load = useCallback(async () => {
@@ -45,7 +48,7 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [setMessage]);
 
   useEffect(() => {
     let cancelled = false;
@@ -70,13 +73,15 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
       if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, []);
+  }, [setMessage]);
 
   const updateDraft = (id: string, field: 'role' | 'status' | 'workManager', value: AccountRole | AccountStatus | boolean) => {
+    setDirtyIds((current) => [...new Set([...current, id])]);
     setUsers((current) => current.map((user) => user.id === id ? { ...user, [field]: value } : user));
   };
 
   const saveUser = async (user: ManagedUser) => {
+    if (busyId || loading) return;
     setBusyId(user.id);
     try {
       const result = await apiRequest<{ user: ManagedUser }>(`/api/admin/users/${user.id}`, {
@@ -91,11 +96,11 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
       setUsers((current) => current.map((candidate) => candidate.id === user.id ? result.user : candidate));
       setTone('success');
       setMessage(`已更新 ${user.displayName} 的账号权限。`);
+      setDirtyIds((current) => current.filter((id) => id !== user.id));
       void refreshLogs(setLogs);
     } catch (error) {
       setTone('error');
       setMessage(errorText(error));
-      void load();
     } finally {
       setBusyId('');
     }
@@ -121,6 +126,8 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
   };
 
   const toggleRegistration = async () => {
+    if (busyId || loading) return;
+    setBusyId('registration');
     try {
       const result = await apiRequest<{ settings: { registrationOpen: boolean } }>('/api/admin/settings', {
         method: 'PATCH',
@@ -133,7 +140,7 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
     } catch (error) {
       setTone('error');
       setMessage(errorText(error));
-    }
+    } finally { setBusyId(''); }
   };
 
   const addDepartment = async (event: FormEvent<HTMLFormElement>) => {
@@ -175,12 +182,13 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
 
   return (
     <section className="content-card admin-workspace">
+      <fieldset className="form-operation-fields" disabled={loading || Boolean(busyId) || Boolean(resetTarget)}>
       <div className="content-card__heading">
         <div>
           <p className="eyebrow">05 账号权限</p>
           <h1>账号与权限</h1>
         </div>
-        <button type="button" className="secondary-button" disabled={loading} onClick={() => void load()}>刷新</button>
+        <button type="button" className="secondary-button" disabled={loading} onClick={async () => { if (await confirmPageLeave()) { setDirtyIds([]); setDepartmentLabel(''); void load(); } }}>刷新</button>
       </div>
 
       <div className="admin-setting-card">
@@ -193,7 +201,7 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
         </button>
       </div>
 
-      <StatusMessage message={message} tone={tone} />
+      <StatusMessage message={message} tone={tone} eventId={messageRevision} />
 
       <div className="department-admin-card">
         <div className="section-heading-inline">
@@ -261,6 +269,7 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
 
       <AuditTrailPanel logs={logs} />
 
+      </fieldset>
       {resetTarget && (
         <PasswordResetDialog
           user={resetTarget}
@@ -280,8 +289,10 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
 function PasswordResetDialog({ user, onClose, onSuccess }: { user: ManagedUser; onClose: () => void; onSuccess: (message: string) => void }) {
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
-  const [message, setMessage] = useState('');
+  const [message, setMessage, messageRevision] = useFeedback();
   const [busy, setBusy] = useState(false);
+  const modalRef = useModalFocus(onClose, busy);
+  useUnsavedChanges(Boolean(password || confirm), busy);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -303,16 +314,18 @@ function PasswordResetDialog({ user, onClose, onSuccess }: { user: ManagedUser; 
 
   return (
     <div className="modal-backdrop" role="presentation">
-      <section className="small-modal" role="dialog" aria-modal="true" aria-labelledby="admin-password-title">
-        <header><div><h2 id="admin-password-title">重置 {user.displayName} 的密码</h2></div><button className="icon-button" type="button" onClick={onClose}>×</button></header>
+      <section ref={modalRef} tabIndex={-1} className="small-modal" role="dialog" aria-modal="true" aria-labelledby="admin-password-title">
+        <header><div><h2 id="admin-password-title">重置 {user.displayName} 的密码</h2></div><button className="icon-button" type="button" disabled={busy} onClick={onClose}>×</button></header>
         <form
           onSubmit={submit}
           onInvalidCapture={(event) => setMessage(invalidFormControlMessage(event))}
         >
+          <fieldset className="form-operation-fields" disabled={busy}>
           <label><span>新临时密码</span><input type="password" minLength={8} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
           <label><span>确认临时密码</span><input type="password" minLength={8} maxLength={128} value={confirm} onChange={(event) => setConfirm(event.target.value)} required /></label>
-          <StatusMessage message={message} tone="error" />
+          <StatusMessage message={message} tone="error" eventId={messageRevision} />
           <footer><button type="button" className="secondary-button" onClick={onClose}>取消</button><button type="submit" className="primary-button" disabled={busy}>{busy ? '处理中…' : '确认重置'}</button></footer>
+          </fieldset>
         </form>
       </section>
     </div>

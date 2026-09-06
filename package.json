@@ -14,7 +14,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "node scripts/prepare-local-db.mjs",
     "db:migrate:remote": "wrangler d1 migrations apply tabito-payroll-db --remote --config wrangler.jsonc",
-    "deploy:cloudflare": "npm run build && wrangler deploy --config dist/server/wrangler.json",
+    "deploy:cloudflare": "node scripts/deploy-cloudflare.mjs",
     "demo:seed": "node scripts/create-local-demo.mjs",
     "gray:install": "node scripts/install-gray-fixture.mjs",
     "gray:seed": "node scripts/seed-gray-fixture.mjs",
@@ -25,7 +25,10 @@
     "self-check:backend": "node scripts/backend-self-check.mjs",
     "self-check:delegated-ui": "node scripts/delegated-workspace-self-check.mjs",
     "self-check:proxy": "node scripts/proxy-payroll-self-check.mjs",
-    "self-check:logic": "node scripts/payroll-logic-self-check.mjs"
+    "self-check:logic": "node scripts/payroll-logic-self-check.mjs",
+    "self-check:audit-fixes": "node scripts/audit-fixes-self-check.mjs",
+    "self-check:subpath": "node scripts/subpath-self-check.mjs",
+    "self-check:deployment": "node scripts/deployment-reset-self-check.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",

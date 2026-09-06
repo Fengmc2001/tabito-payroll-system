@@ -2,6 +2,7 @@
 
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from 'react';
 import { FileNameInput, Field, FormSection, StatusMessage, invalidFormControlMessage } from './form-controls';
+import { useFeedback, useModalFocus, useUnsavedChanges, useUploadTracker } from './interaction-guards';
 import { apiRequest } from '../lib/api-client';
 import {
   APPLY_TYPES,
@@ -20,8 +21,11 @@ import {
   getApplyTypeLabel,
   getDepartmentLabel,
   monthDateRange,
+  monthIsValid,
+  sumWorkTime,
   nextPaymentDate,
   recalculateRecord,
+  resolveWorkManager,
   SalaryApplyType,
 } from '../lib/payroll';
 import { CurrencyAmountsView, Money } from './payroll-ui';
@@ -60,7 +64,7 @@ export function SalaryWorkspace({
   const naturalMonth = currentMonth();
   const [month, setMonth] = useState(naturalMonth);
   const [editing, setEditing] = useState<SalaryRecord | null>(null);
-  const [notice, setNotice] = useState('');
+  const [notice, setNotice, noticeRevision] = useFeedback();
   const [noticeTone, setNoticeTone] = useState<'success' | 'error' | 'info'>('info');
   const [busy, setBusy] = useState(false);
   const [departments, setDepartments] = useState<DepartmentOption[]>([]);
@@ -76,7 +80,7 @@ export function SalaryWorkspace({
         }
       });
     return () => { cancelled = true; };
-  }, []);
+  }, [setNotice]);
   const currentRecords = records
     .filter((record) => record.workDate.startsWith(month))
     .sort((left, right) => right.workDate.localeCompare(left.workDate));
@@ -92,10 +96,11 @@ export function SalaryWorkspace({
     setEditing(record);
   };
 
-  const save = (next: SalaryRecord) => {
+  const save = async (next: SalaryRecord) => {
+    if (busy) return;
     setBusy(true);
-    void onSave(next).then(() => {
-      setEditing(null);
+    await onSave(next).then(() => {
+      setEditing((current) => current?.id === next.id ? null : current);
       setNoticeTone('success');
       setNotice('工资记录已保存。');
     }).catch((error) => {
@@ -121,7 +126,7 @@ export function SalaryWorkspace({
       copyDraft.departmentKey = '';
       copyDraft.departmentLabel = '';
     }
-    const manager = workManagers.find((item) => item.id === copyDraft.checkUserId || item.label === copyDraft.checkUser);
+    const manager = resolveWorkManager(workManagers, copyDraft.checkUserId, copyDraft.checkUser);
     copyDraft.checkUserId = manager?.id ?? '';
     copyDraft.checkUser = manager?.label ?? '';
     setEditing(copyDraft);
@@ -164,7 +169,7 @@ export function SalaryWorkspace({
           {embedded ? <h2 className="workspace-panel-title">本人申报</h2> : <h1>本期工资申报</h1>}
         </div>
         <div className="heading-actions">
-          <label className="month-picker"><span>申报月份</span><input type="month" value={month} onChange={(event) => setMonth(event.target.value || naturalMonth)} /></label>
+          <label className="month-picker"><span>申报月份</span><input type="month" value={month} onChange={(event) => setMonth(monthIsValid(event.target.value) ? event.target.value : naturalMonth)} /></label>
           <button type="button" className="secondary-button" disabled={busy} onClick={refresh}>刷新状态</button>
           <button type="button" className="secondary-button" disabled={busy} onClick={openNewRecord}>+ 新建工资记录</button>
           <button type="button" className="primary-button" disabled={busy} onClick={apply}>{busy ? '处理中…' : '提交本期记录'}</button>
@@ -179,7 +184,7 @@ export function SalaryWorkspace({
         <SummaryCard label="已驳回" value={<CurrencyAmountsView amounts={summary.rejected} />} tone="rejected" />
       </div>
 
-      <StatusMessage message={notice} tone={noticeTone} />
+      <StatusMessage message={notice} tone={noticeTone} eventId={noticeRevision} />
 
       <section className="salary-draft-section">
         <div className="salary-record-section__heading"><div><h2>未提交记录</h2></div><span>{drafts.length} 条</span></div>
@@ -196,6 +201,7 @@ export function SalaryWorkspace({
         <SalaryRecordDialog
           key={editing.id}
           initial={editing}
+          busy={busy}
           departments={departments}
           workManagers={workManagers}
           onClose={() => setEditing(null)}
@@ -213,8 +219,7 @@ export function SalaryHistory({ records }: { records: SalaryRecord[] }) {
     .filter((record) => record.status === 3 && record.workDate.startsWith(month))
     .sort((left, right) => right.workDate.localeCompare(left.workDate));
   const totalSalary = sumAmounts(approved);
-  const totalHours = approved.reduce((sum, record) => sum + record.workHours, 0);
-  const totalRest = approved.reduce((sum, record) => sum + record.restHours, 0);
+  const { workHours: totalHours, restHours: totalRest } = sumWorkTime(approved);
 
   return (
     <section className="content-card history-workspace">
@@ -225,7 +230,7 @@ export function SalaryHistory({ records }: { records: SalaryRecord[] }) {
         </div>
         <label className="month-picker">
           <span>月份</span>
-          <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} />
+          <input type="month" value={month} onChange={(event) => setMonth(monthIsValid(event.target.value) ? event.target.value : currentMonth())} />
         </label>
       </div>
 
@@ -387,23 +392,30 @@ export function SalaryRecordDialog({
   month,
   allowDirectSubmit = false,
   directSubmitDisabled = false,
+  busy = false,
 }: {
   initial: SalaryRecord;
   departments: DepartmentOption[];
   workManagers: WorkManagerOption[];
   onClose: () => void;
-  onSave: (record: SalaryRecord, submit?: boolean) => void;
+  onSave: (record: SalaryRecord, submit?: boolean) => Promise<void> | void;
   onUpload?: (file: File) => Promise<string>;
   title?: string;
   month?: string;
   allowDirectSubmit?: boolean;
   directSubmitDisabled?: boolean;
+  busy?: boolean;
 }) {
   const [draft, setDraft] = useState(() => {
-    const manager = workManagers.find((item) => item.id === initial.checkUserId || item.label === initial.checkUser);
+    const manager = resolveWorkManager(workManagers, initial.checkUserId, initial.checkUser);
     return recalculateRecord({ ...initial, checkUserId: manager?.id ?? '', checkUser: manager?.label ?? '' });
   });
-  const [error, setError] = useState('');
+  const [error, setError, errorRevision] = useFeedback();
+  const [saving, setSaving] = useState(false);
+  const { uploading, trackUpload } = useUploadTracker(onUpload);
+  const locked = busy || saving || uploading;
+  const modalRef = useModalFocus(onClose, locked);
+  useUnsavedChanges(JSON.stringify(draft) !== JSON.stringify(recalculateRecord(initial)), locked);
   const allowedTypes = APPLY_TYPES.map((item) => item.value);
   const showRate = draft.applyType !== 5;
   const showTime = draft.applyType === 1 || draft.applyType === 7;
@@ -426,8 +438,9 @@ export function SalaryRecordDialog({
     });
   };
 
-  const submit = (event: FormEvent<HTMLFormElement>) => {
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (locked) return;
     const completed = recalculateRecord(draft);
     if (!completed.workDate || !completed.checkUserId || !completed.checkUser || !completed.departmentKey) {
       setError('日期、工作负责人和工作所属部门为必填项。');
@@ -455,7 +468,10 @@ export function SalaryRecordDialog({
     }
     setError('');
     const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLElement | null;
-    onSave(completed, submitter?.dataset.submit === 'pending');
+    setSaving(true);
+    try { await onSave(completed, submitter?.dataset.submit === 'pending'); }
+    catch (error) { setError(messageFrom(error)); }
+    finally { setSaving(false); }
   };
 
   const reportInvalid = (event: FormEvent<HTMLFormElement>) => {
@@ -464,15 +480,16 @@ export function SalaryRecordDialog({
 
   return (
     <div className="modal-backdrop" role="presentation">
-      <section className="record-modal" role="dialog" aria-modal="true" aria-labelledby="record-dialog-title">
+      <section ref={modalRef} tabIndex={-1} className="record-modal" role="dialog" aria-modal="true" aria-labelledby="record-dialog-title">
         <header className="record-modal__header">
           <div>
             <h2 id="record-dialog-title">{title ?? (initial.createdAt === initial.updatedAt ? '新建工资记录' : '编辑工资记录')}</h2>
           </div>
-          <button type="button" className="icon-button" aria-label="关闭" onClick={onClose}>×</button>
+          <button type="button" className="icon-button" aria-label="关闭" disabled={locked} onClick={onClose}>×</button>
         </header>
 
         <form onSubmit={submit} onInvalidCapture={reportInvalid}>
+          <fieldset className="form-operation-fields" disabled={locked}>
           <div className="record-modal__body">
             <FormSection title="工作信息">
               <div className="form-grid form-grid--two">
@@ -577,13 +594,13 @@ export function SalaryRecordDialog({
                   </Field>
                 )}
                 <Field label="附件">
-                  <FileNameInput value={draft.attachments} maximum={8} onUpload={onUpload} onChange={(files) => update('attachments', files)} />
+                  <FileNameInput value={draft.attachments} maximum={8} onUpload={trackUpload} onChange={(files) => update('attachments', files)} />
                 </Field>
               </div>
             </FormSection>
           </div>
           <footer className="record-modal__footer">
-            <StatusMessage message={error} tone="error" />
+            <StatusMessage message={error} tone="error" eventId={errorRevision} />
             <div>
               <button type="button" className="secondary-button" onClick={onClose}>取消</button>
               {allowDirectSubmit ? <>
@@ -592,6 +609,7 @@ export function SalaryRecordDialog({
               </> : <button type="submit" className="primary-button">保存</button>}
             </div>
           </footer>
+          </fieldset>
         </form>
       </section>
     </div>

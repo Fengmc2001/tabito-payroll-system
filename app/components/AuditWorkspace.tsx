@@ -1,9 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CircleDollarSign } from 'lucide-react';
+import { useFeedback } from './interaction-guards';
 import { ApiClientError, apiRequest } from '../lib/api-client';
-import { AuditOverview, CurrencyAmounts, currentMonth as getCurrentMonth } from '../lib/payroll';
+import { AuditOverview, CurrencyAmounts, monthIsValid, currentMonth as getCurrentMonth } from '../lib/payroll';
 import { AuditTrailPanel, CurrencyAmountsView } from './payroll-ui';
 import { StatusMessage } from './form-controls';
 
@@ -13,7 +14,9 @@ export function AuditWorkspace() {
   const [userId, setUserId] = useState('');
   const [overview, setOverview] = useState<AuditOverview | null>(null);
   const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState('');
+  const requestRevision = useRef(0);
+  const [loadedScope, setLoadedScope] = useState('');
+  const [message, setMessage, feedbackRevision] = useFeedback();
   const activeMonthlySummaries = overview?.monthlySummaries.filter((summary) => summary.recordCount > 0) ?? [];
   const duplicateEmployeeNames = useMemo(() => {
     const counts = new Map<string, number>();
@@ -24,43 +27,39 @@ export function AuditWorkspace() {
   }, [overview?.employees]);
 
   const load = useCallback(async () => {
-    setLoading(true);
+    const revision = ++requestRevision.current;
     try {
       const query = new URLSearchParams({ year: month.slice(0, 4), month });
       if (userId) query.set('userId', userId);
       const result = await apiRequest<{ overview: AuditOverview }>(`/api/audit/overview?${query}`);
+      if (revision !== requestRevision.current) return;
       setOverview(result.overview);
+      setLoadedScope(month + ':' + userId);
       setMessage('');
     } catch (error) {
-      setMessage(errorText(error));
+      if (revision === requestRevision.current) setMessage(errorText(error));
     } finally {
-      setLoading(false);
+      if (revision === requestRevision.current) setLoading(false);
     }
-  }, [month, userId]);
+  }, [month, userId, setMessage]);
 
   useEffect(() => {
-    let cancelled = false;
-    const query = new URLSearchParams({ year: month.slice(0, 4), month });
-    if (userId) query.set('userId', userId);
-    void apiRequest<{ overview: AuditOverview }>(`/api/audit/overview?${query}`)
-      .then((result) => { if (!cancelled) { setOverview(result.overview); setMessage(''); } })
-      .catch((error) => { if (!cancelled) setMessage(errorText(error)); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [month, userId]);
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => { window.clearTimeout(timer); requestRevision.current += 1; };
+  }, [load]);
 
   return (
     <section className="content-card audit-workspace">
       <div className="content-card__heading">
         <div><p className="eyebrow">07 总审计</p><h1>工资统计与审计</h1></div>
-        <button type="button" className="secondary-button" disabled={loading} onClick={() => void load()}>刷新</button>
+        <button type="button" className="secondary-button" disabled={loading} onClick={() => { setLoading(true); void load(); }}>刷新</button>
       </div>
       <div className="audit-filters">
-        <label><span>月份</span><input type="month" value={month} onChange={(event) => setMonth(event.target.value || currentMonth)} /></label>
-        <label><span>员工</span><select value={userId} onChange={(event) => setUserId(event.target.value)}><option value="">全部员工</option>{overview?.employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName}{duplicateEmployeeNames.has(employee.displayName) ? `（${employee.email}）` : ''}</option>)}</select></label>
+        <label><span>月份</span><input type="month" value={month} onBlur={(event) => { event.currentTarget.value = month; }} onChange={(event) => { const next = event.target.value || currentMonth; if (!monthIsValid(next)) { event.target.value = month; setMessage('请选择有效月份。'); return; } event.target.value = next; if (next === month) return; requestRevision.current += 1; setLoading(true); setMonth(next); }} /></label>
+        <label><span>员工</span><select value={userId} onChange={(event) => { requestRevision.current += 1; setLoading(true); setUserId(event.target.value); }}><option value="">全部员工</option>{overview?.employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.displayName}{duplicateEmployeeNames.has(employee.displayName) ? `（${employee.email}）` : ''}</option>)}</select></label>
       </div>
-      <StatusMessage message={message} tone="error" />
-      {loading && !overview ? <div className="empty-state">正在加载…</div> : overview && <>
+      <StatusMessage message={message} eventId={feedbackRevision} tone="error" />
+      {loading ? <div className="empty-state">正在加载…</div> : overview && loadedScope === month + ':' + userId && <>
         <div className="summary-grid summary-grid--three audit-primary-grid">
           <AuditMetric label={`${overview.month} 已通过`} amounts={overview.monthSummary.approvedAmounts} tone="approved" important />
           <AuditMetric label={`${overview.year} 年已通过`} amounts={overview.yearSummary.approvedAmounts} tone="approved" important />

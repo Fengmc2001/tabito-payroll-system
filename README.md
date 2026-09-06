@@ -72,6 +72,8 @@ PAYROLL_GRAY_BASE_URL=http://localhost:3200 npm run gray:credentials
 npm run lint
 npx tsc --noEmit
 npm run self-check:logic
+npm run self-check:audit-fixes
+npm run self-check:deployment
 npm run self-check:delegated-ui
 npm run build
 npm audit --omit=dev
@@ -98,11 +100,19 @@ npm run self-check:proxy
 
 2026-09-04 的完整回归结果：纯逻辑 27 个断言、代报与导航界面 18 个断言、后端账号/权限/业务 408 个断言、代报/批量/定期规则 226 个断言，全部通过。回归还覆盖一次 62 条批量代报及重放、21 条同月草稿原子提交、旧密码登录与管理员改密竞态、改密会话轮换，以及从空库依次执行 `0000`–`0006` 迁移。独立灰度库另外完成重复幂等初始化、205 项校验和安全清除。详细权限矩阵见 [`docs/backend-self-check.md`](docs/backend-self-check.md)，浏览器与鲁棒性检查见 [`docs/robustness-test-report.md`](docs/robustness-test-report.md)。
 
+## 2026-09-06 修复更新
+
+修复计薪少算、工时累计、收款人残留与隐藏必填、月份输入、保存/上传期间的交互、重复提示、批量申报刷新及自动草稿等问题。新增站内未保存确认和灰度退役单次执行保护。详见 [`docs/audit-fixes-2026-09-06.md`](docs/audit-fixes-2026-09-06.md)。
+
+**服务器发布注意：本版本首次执行 `npm run deploy:cloudflare` 会要求备份确认 `(y/n)`，输入 `y` 后清空本系统旧账号、工资、资料、审批、日志和上传附件，并恢复固定首管理员初始化。首次正式上线且没有旧数据时无需备份。完成后写入一次性标记，后续更新不再清空；本地 `dev` / `build` / `start` 不执行此重置。**
+
+功能修复本身不新增常规 schema 迁移，也不会重算本地历史金额；上述服务器首次发布重置是单独、明确确认的流程。
+
 ## 部署
 
 生产环境推荐 Cloudflare Workers + D1 + 私有 R2，与源码的运行时、SQLite 语义和文件权限模型完全一致。仓库已包含 `wrangler.jsonc`、Drizzle 迁移、生产构建/部署命令和自定义域名流程。
 
-按 [`docs/server-deployment.md`](docs/server-deployment.md) 操作：创建 D1/R2、填入 D1 ID、执行迁移、部署 Worker、用 `wrangler secret put` 配置首次初始化密钥、绑定域名，然后使用固定首个管理员账号进行初始化。
+按 [`docs/server-deployment.md`](docs/server-deployment.md) 操作：创建专用 D1/R2、填入 D1 ID、预先配置首次初始化密钥与部署凭据，然后运行发布命令并确认备份提示。首次发布清理旧数据，之后从空库注册固定首管理员。不要直接运行 `wrangler deploy` 绕过本版本的初始化流程。
 
 需要在独立 D1/R2 中试用 12 个管理员、审核员和员工账号时，按 [`docs/gray-testing.md`](docs/gray-testing.md) 使用 `gray:install` 一行初始化并验证，用 `gray:retire` 一行清除并恢复正式空库。测试密码只写入本地忽略文件；生产环境不会自动写入测试数据。
 

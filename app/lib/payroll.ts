@@ -100,6 +100,7 @@ export type SalaryRecord = {
 
 export type StoredAccount = {
   id: string;
+  profileVersion?: string;
   email: string;
   role: AccountRole;
   status: AccountStatus;
@@ -205,6 +206,7 @@ export type AuditLogItem = {
   targetType: string;
   targetId: string;
   detail: Record<string, unknown>;
+  businessMonth?: string | null;
   createdAt: string;
 };
 
@@ -222,6 +224,12 @@ export type WorkManagerOption = {
   label: string;
   email: string;
 };
+
+export function resolveWorkManager(managers: WorkManagerOption[], id: string, label: string) {
+  if (id) return managers.find((manager) => manager.id === id);
+  const matches = managers.filter((manager) => manager.label === label);
+  return matches.length === 1 ? matches[0] : undefined;
+}
 
 export type StoredFileInfo = {
   key: string;
@@ -452,9 +460,10 @@ export function createRecord(userId: string): SalaryRecord {
 }
 
 export function recalculateRecord(record: SalaryRecord): SalaryRecord {
-  const totalMinutes = getWorkMinutes(record.startTime, record.endTime);
+  const hasTime = record.applyType === 1 || record.applyType === 7;
+  const totalMinutes = hasTime ? getWorkMinutes(record.startTime, record.endTime) : 0;
   const totalHours = Number((totalMinutes / 60).toFixed(2));
-  const requestedRest = numberOrZero(record.restHours);
+  const requestedRest = hasTime ? numberOrZero(record.restHours) : 0;
   const restMinutes = Math.round(Math.max(0, Math.min(24, requestedRest)) * 60);
   const paidMinutes = Math.max(0, totalMinutes - restMinutes);
   const restHours = Number((restMinutes / 60).toFixed(2));
@@ -463,7 +472,7 @@ export function recalculateRecord(record: SalaryRecord): SalaryRecord {
 
   switch (record.applyType) {
     case 1:
-      finalSalary = Math.floor((paidMinutes / 60) * numberOrZero(record.rate) + numberOrZero(record.travelFee));
+      finalSalary = Math.floor((paidMinutes * numberOrZero(record.rate) + 60 * numberOrZero(record.travelFee)) / 60);
       break;
     case 2:
     case 3:
@@ -483,11 +492,40 @@ export function recalculateRecord(record: SalaryRecord): SalaryRecord {
 
   return {
     ...record,
+    startTime: hasTime ? record.startTime : '',
+    endTime: hasTime ? record.endTime : '',
     totalHours,
     workHours,
     restHours,
     finalSalary: Number.isFinite(finalSalary) ? Math.floor(finalSalary) : 0,
   };
+}
+
+export function sumWorkTime(records: SalaryRecord[]) {
+  let workMinutes = 0;
+  let restMinutes = 0;
+  for (const record of records) {
+    if (record.applyType !== 1 && record.applyType !== 7) continue;
+    const total = getWorkMinutes(record.startTime, record.endTime);
+    const rest = Math.min(total, Math.max(0, Math.round(numberOrZero(record.restHours) * 60)));
+    workMinutes += total - rest;
+    restMinutes += rest;
+  }
+  return { workHours: workMinutes / 60, restHours: restMinutes / 60 };
+}
+
+export function usesOtherPayee(profile: Profile) {
+  return (profile.bankType === 'cn-bank' || profile.bankType === 'alipay') && profile.payeeIsSelf === '否';
+}
+
+export function effectivePayee(profile: Profile, fallbackName: string) {
+  return usesOtherPayee(profile)
+    ? { name: profile.payeeName, idNumber: profile.payeeIdNumber }
+    : { name: fallbackName, idNumber: profile.idNumber };
+}
+
+export function normalizePayeeProfile(profile: Profile): Profile {
+  return usesOtherPayee(profile) ? profile : { ...profile, payeeName: '', payeeIdNumber: '' };
 }
 
 export function getWorkHours(startTime: string, endTime: string) {
@@ -572,7 +610,7 @@ export function profileMissingRequirements(profile: Profile) {
   if ((profile.bankType === 'cn-bank' || profile.bankType === 'alipay') && !profile.payeeIsSelf) {
     missing.push('收款人是否本人');
   }
-  if (profile.payeeIsSelf === '否' && !profile.payeeName.trim()) missing.push('收款人姓名');
+  if (usesOtherPayee(profile) && !profile.payeeName.trim()) missing.push('收款人姓名');
   return [...new Set(missing)];
 }
 

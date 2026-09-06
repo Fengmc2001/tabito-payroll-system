@@ -1,6 +1,40 @@
 'use client';
 
-import { ChangeEvent, FormEvent, ReactNode, useEffect, useId, useState } from 'react';
+import { ChangeEvent, FormEvent, ReactNode, useEffect, useId, useRef, useState } from 'react';
+import { LeavePrompt, subscribeLeavePrompt, useFeedback, useModalFocus } from './interaction-guards';
+
+export function NavigationPromptHost() {
+  const [prompt, setPrompt] = useState<LeavePrompt | null>(null);
+  const current = useRef<LeavePrompt | null>(null);
+  useEffect(() => {
+    const unsubscribe = subscribeLeavePrompt((next) => {
+      current.current?.resolve(false);
+      current.current = next;
+      setPrompt(next);
+    });
+    return () => { unsubscribe(); current.current?.resolve(false); };
+  }, []);
+  const finish = (leave: boolean) => {
+    current.current?.resolve(leave);
+    current.current = null;
+    setPrompt(null);
+  };
+  return prompt ? <NavigationPrompt blocked={prompt.blocked} onFinish={finish} /> : null;
+}
+
+function NavigationPrompt({ blocked, onFinish }: { blocked: boolean; onFinish: (leave: boolean) => void }) {
+  const ref = useModalFocus(() => onFinish(false));
+  return <div className="modal-backdrop">
+    <section ref={ref} tabIndex={-1} className="small-modal" role="alertdialog" aria-modal="true" aria-labelledby="leave-prompt-title">
+      <h2 id="leave-prompt-title">{blocked ? '请稍候' : '内容尚未保存'}</h2>
+      <p>{blocked ? '正在保存或上传，完成后即可离开。' : '离开后，本次未保存的修改将被放弃。'}</p>
+      <div className="form-actions">
+        <button type="button" className="secondary-button" onClick={() => onFinish(false)}>{blocked ? '知道了' : '继续填写'}</button>
+        {!blocked && <button type="button" className="primary-button" onClick={() => onFinish(true)}>放弃修改</button>}
+      </div>
+    </section>
+  </div>;
+}
 
 export function Field({
   label,
@@ -82,8 +116,10 @@ export function FileNameInput({
 }) {
   const id = useId();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError, errorRevision] = useFeedback();
+  const uploading = useRef(false);
   const changeFiles = async (event: ChangeEvent<HTMLInputElement>) => {
+    if (uploading.current) return;
     const selectedFiles = Array.from(event.target.files ?? []);
     const remaining = Math.max(0, maximum - value.length);
     event.target.value = '';
@@ -96,21 +132,26 @@ export function FileNameInput({
     const limitWarning = selectedFiles.length > remaining
       ? `最多只能上传 ${maximum} 个文件，本次仅保留前 ${remaining} 个。`
       : '';
+    uploading.current = true;
     setBusy(true);
     setError(limitWarning);
     try {
-      const names = onUpload ? await Promise.all(files.map(onUpload)) : files.map((file) => file.name);
+      const results = await Promise.allSettled(files.map((file) => onUpload ? onUpload(file) : Promise.resolve(file.name)));
+      const names = results.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
       onChange([...value, ...names].slice(0, maximum));
+      const failures = results.flatMap((result, index) => result.status === 'rejected' ? [files[index].name] : []);
+      if (failures.length) setError(`上传失败：${failures.join('、')}。其余文件已保留。`);
     } catch {
       setError('文件上传失败，请重试。');
     } finally {
+      uploading.current = false;
       setBusy(false);
     }
   };
 
   return (
     <div className="file-picker">
-      <input id={id} type="file" accept={accept} multiple={maximum > 1} onChange={changeFiles} />
+      <input id={id} type="file" accept={accept} multiple={maximum > 1} onChange={changeFiles} disabled={busy} />
       <label className="secondary-button file-picker__button" htmlFor={id}>{busy ? '上传中…' : '+ 上传文件'}</label>
       <span className="file-picker__limit">最多 {maximum} 个图片/PDF</span>
       {value.length > 0 && (
@@ -120,6 +161,7 @@ export function FileNameInput({
               <span title={name}>{friendlyFileName(name)}</span>
               <button
                 type="button"
+                disabled={busy}
                 aria-label={`移除 ${name}`}
                 onClick={() => {
                   setError('');
@@ -132,7 +174,7 @@ export function FileNameInput({
           ))}
         </ul>
       )}
-      <StatusMessage message={error} tone="error" />
+      <StatusMessage message={error} tone="error" eventId={errorRevision} />
     </div>
   );
 }
@@ -145,9 +187,11 @@ function friendlyFileName(value: string) {
 export function StatusMessage({
   message,
   tone = 'success',
+  eventId = 0,
 }: {
   message: string;
   tone?: 'success' | 'error' | 'info';
+  eventId?: number;
 }) {
   const [popupVisible, setPopupVisible] = useState(Boolean(message));
 
@@ -161,7 +205,7 @@ export function StatusMessage({
       window.clearTimeout(showTimer);
       window.clearTimeout(hideTimer);
     };
-  }, [message, tone]);
+  }, [message, tone, eventId]);
 
   if (!message) return null;
   const title = tone === 'error' ? '操作警示' : tone === 'success' ? '操作成功' : '系统提示';

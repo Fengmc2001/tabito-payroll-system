@@ -244,6 +244,11 @@ async function patchManagedUser(userId, body) {
 }
 
 async function request(path, options = {}) {
+  // Sequential fixture saves use a fresh version; concurrency cases pass an explicit snapshot.
+  if (options.method === 'PATCH' && options.body?.profile && !Object.hasOwn(options.body, 'expectedProfileVersion')) {
+    const snapshot = await request(path, { cookie: options.cookie });
+    options = { ...options, body: { ...options.body, expectedProfileVersion: snapshot.data.account?.profileVersion } };
+  }
   const headers = new Headers();
   if (options.cookie) headers.set('cookie', options.cookie);
   if (options.body !== undefined) headers.set('content-type', 'application/json');

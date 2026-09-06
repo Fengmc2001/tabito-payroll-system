@@ -1,5 +1,7 @@
 'use client';
 
+import { appPath } from './app-path';
+
 export class ApiClientError extends Error {
   constructor(public status: number, message: string) {
     super(message);
@@ -18,7 +20,7 @@ export async function apiRequest<T>(
   const headers = new Headers();
   if (options.token) headers.set('authorization', `Bearer ${options.token}`);
   if (options.body !== undefined) headers.set('content-type', 'application/json');
-  const response = await fetch(path, {
+  const response = await fetch(appPath(path), {
     method: options.method ?? 'GET',
     headers,
     credentials: 'same-origin',
