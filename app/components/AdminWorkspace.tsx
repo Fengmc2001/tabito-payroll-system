@@ -1,5 +1,6 @@
 'use client';
 
+import { AccountAccessPanel } from './AccountAccessPanel';
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { useFeedback, useModalFocus, useUnsavedChanges, confirmPageLeave } from './interaction-guards';
 import { ApiClientError, apiRequest } from '../lib/api-client';
@@ -11,6 +12,7 @@ import {
   DepartmentOption,
   ManagedUser,
   ROLE_LABELS,
+  formatJapanDateTime,
 } from '../lib/payroll';
 import { StatusMessage, invalidFormControlMessage } from './form-controls';
 import { AuditTrailPanel } from './payroll-ui';
@@ -23,6 +25,7 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
   const [registrationOpen, setRegistrationOpen] = useState(true);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState('');
+  const [accessEditing, setAccessEditing] = useState(false);
   const [dirtyIds, setDirtyIds] = useState<string[]>([]);
   useUnsavedChanges(dirtyIds.length > 0 || Boolean(departmentLabel), Boolean(busyId));
   const [resetTarget, setResetTarget] = useState<ManagedUser | null>(null);
@@ -188,7 +191,7 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
           <p className="eyebrow">05 账号权限</p>
           <h1>账号与权限</h1>
         </div>
-        <button type="button" className="secondary-button" disabled={loading} onClick={async () => { if (await confirmPageLeave()) { setDirtyIds([]); setDepartmentLabel(''); void load(); } }}>刷新</button>
+        <button type="button" className="secondary-button" disabled={loading || accessEditing} onClick={async () => { if (await confirmPageLeave()) { setDirtyIds([]); setDepartmentLabel(''); void load(); } }}>刷新</button>
       </div>
 
       <div className="admin-setting-card">
@@ -203,7 +206,13 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
 
       <StatusMessage message={message} tone={tone} eventId={messageRevision} />
 
-      <div className="department-admin-card">
+      <fieldset className="form-operation-fields" disabled={dirtyIds.length > 0}>
+      {dirtyIds.length > 0 && <p className="muted-text">请先保存下方的账号角色更改，再调整查看与审核配置。</p>}
+      <AccountAccessPanel onEditingChange={setAccessEditing} users={users} onSaved={(updated) => { setUsers((current) => current.map((u) => u.id === updated.id ? updated : u)); setTone('success'); setMessage('查看与审核配置已保存。'); void refreshLogs(setLogs); }} />
+
+      </fieldset>
+      <fieldset className="form-operation-fields" disabled={accessEditing}>
+      <details className="admin-fold"><summary>部门设置</summary><div className="department-admin-card">
         <div className="section-heading-inline">
           <div><h2>工作所属部门</h2></div>
         </div>
@@ -226,6 +235,8 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
         </div>
       </div>
 
+      </details>
+      <details className="admin-fold"><summary>账号角色、状态与密码</summary>
       {loading ? (
         <div className="empty-state">正在加载账号权限…</div>
       ) : (
@@ -252,12 +263,12 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
                       <option value="no">不可被选择</option>
                     </select>
                   </td>
-                  <td>{user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString('zh-CN') : '尚未登录'}</td>
+                  <td>{user.lastLoginAt ? formatJapanDateTime(user.lastLoginAt) : '尚未登录'}</td>
                   <td>
                     <div className="row-actions admin-row-actions">
                       <button type="button" disabled={busyId === user.id} onClick={() => void saveUser(user)}>保存</button>
-                      <button type="button" disabled={busyId === user.id} onClick={() => void revokeSessions(user)}>撤销会话</button>
-                      <button type="button" disabled={busyId === user.id} onClick={() => setResetTarget(user)}>重置密码</button>
+                      <button type="button" disabled={busyId === user.id || dirtyIds.includes(user.id)} onClick={() => void revokeSessions(user)}>撤销会话</button>
+                      <button type="button" disabled={busyId === user.id || dirtyIds.includes(user.id)} onClick={() => setResetTarget(user)}>重置密码</button>
                     </div>
                   </td>
                 </tr>
@@ -267,8 +278,10 @@ export function AdminWorkspace({ currentUserId }: { currentUserId: string }) {
         </div>
       )}
 
+      </details>
       <AuditTrailPanel logs={logs} />
 
+      </fieldset>
       </fieldset>
       {resetTarget && (
         <PasswordResetDialog

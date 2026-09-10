@@ -4,7 +4,7 @@ import { AccountRole, SalaryRecord } from '../lib/payroll';
 import { DelegatedSalaryWorkspace } from './DelegatedSalaryWorkspace';
 import { SalaryWorkspace } from './SalaryWorkspace';
 
-export type PayrollMode = 'self' | 'single' | 'batch';
+export type PayrollMode = 'self' | 'single' | 'batch' | 'self-batch';
 
 export function PayrollWorkspace({
   currentUserId,
@@ -27,7 +27,8 @@ export function PayrollWorkspace({
   onRefresh: () => Promise<void>;
   onUpload?: (file: File) => Promise<string>;
 }) {
-  const privileged = role === 'reviewer' || role === 'admin';
+  const privileged = role === 'admin';
+  if (mode === 'self-batch') return <DelegatedSalaryWorkspace currentUserId={currentUserId} mode="batch" selfMode />;
   if (!privileged || mode === 'self') {
     return <SalaryWorkspace
       userId={currentUserId}

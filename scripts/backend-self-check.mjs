@@ -81,6 +81,11 @@ if (!adminAccount.profile.lastNameCn || !adminAccount.profile.firstNameCn || !ad
   adminAccount = onboardAdmin.data.account;
 }
 
+const initialAdmins = await request('/api/admin/users', {cookie:adminCookie});
+expectStatus(initialAdmins,200,'administrator list is available after onboarding');
+if (initialAdmins.data.users.filter(user=>user.role==='admin'&&user.status==='active').length !== 1) {
+  throw new Error('This regression tests last-administrator protection. Use a fresh isolated database with exactly one active administrator; do not rerun it after proxy fixtures create another admin.');
+}
 const defaultSettings = await request('/api/admin/settings', { cookie: adminCookie });
 expectStatus(defaultSettings, 200, 'admin can read registration setting');
 assert(defaultSettings.data.settings.registrationOpen === true, 'new-account registration defaults to open on a fresh database');
@@ -164,7 +169,8 @@ await expect(`/api/users/${employee.id}`, 400, 'server rejects overlong profile 
 await expect('/api/admin/users', 403, 'employee cannot list accounts', { cookie: employeeCookie });
 await expect('/api/review/salary-records', 403, 'employee cannot open review queue', { cookie: employeeCookie });
 await expect('/api/staff/employees', 403, 'employee cannot open employee management', { cookie: employeeCookie });
-await expect('/api/audit/recent', 403, 'employee cannot read recent backend audit events', { cookie: employeeCookie });
+const employeeLogs = await expect('/api/audit/recent', 200, 'employee can read scoped personal audit events', { cookie: employeeCookie });
+assert(employeeLogs.data.logs.every((log) => log.subjectUserId === employee.id || log.actorUserId === employee.id), 'personal audit does not expose other accounts');
 await expect('/api/audit/overview', 403, 'employee cannot open total audit', { cookie: employeeCookie });
 await expect('/api/admin/departments', 403, 'employee cannot manage department options', { cookie: employeeCookie });
 const payrollOptions = await request('/api/payroll-options', { cookie: employeeCookie });
@@ -786,6 +792,21 @@ const refreshedOptions = await request('/api/payroll-options', { cookie: employe
 expectStatus(refreshedOptions, 200, 'payroll options refresh after permission changes');
 assert(refreshedOptions.data.workManagers.some((item) => item.id === secondUser.id), 'newly enabled work manager appears in payroll options');
 
+const defaultQueue = await request('/api/review/salary-records', { cookie: secondCookie });
+assert(defaultQueue.data.items.length === 0, 'new reviewer sees no unassigned records');
+await expect('/api/staff/employees', 403, 'reviewer has no employee-management page by default', {cookie: secondCookie});
+await expect('/api/files?key='+encodeURIComponent(bankFileKey), 403, 'reviewer has no bank-file access by default', {cookie: secondCookie, raw:true});
+for (const recordId of [salaryId, cnySalaryId]) {
+  const snapshot = await request('/api/salary-records/'+recordId+'/history', {cookie:adminCookie});
+  await expect('/api/review/salary-records/'+recordId+'/assign', 200, 'administrator explicitly assigns a test record', {
+    method:'PATCH', cookie:adminCookie, body:{reviewerUserId:secondUser.id,expectedUpdatedAt:snapshot.data.record.updatedAt},
+  });
+}
+const configuredReviewer = await managedUserSnapshot(secondUser.id, adminCookie);
+await expect('/api/admin/users/'+secondUser.id+'/access', 200, 'administrator explicitly grants legacy full-data test scope', {
+  method:'PATCH', cookie:adminCookie, body:{...configuredReviewer.access, features:{summary:true,employees:true,audit:true},
+    subjectUserIds:[employee.id,lockUser.id],expectedUpdatedAt:configuredReviewer.updatedAt},
+});
 const queue = await request('/api/review/salary-records', { cookie: secondCookie });
 expectStatus(queue, 200, 'reviewer can open review queue without relogin');
 assert(queue.data.items.some((item) => item.record.id === salaryId), 'pending record appears in review queue');
@@ -973,9 +994,14 @@ function assert(condition, message) {
 }
 
 async function request(path, options = {}) {
+  if (options.method === 'PATCH' && /^\/api\/review\/salary-records\/[^/]+$/.test(path) && options.body?.decision && !Object.hasOwn(options.body, 'expectedUpdatedAt')) {
+    const snapshot = await request('/api/salary-records/' + path.split('/').pop() + '/history', {cookie: options.cookie});
+    if (snapshot.status === 200) options = {...options, body: {...options.body, expectedUpdatedAt: snapshot.data.record.updatedAt}};
+  }
   // Sequential fixture saves use a fresh version; concurrency cases pass an explicit snapshot.
   if (options.method === 'PATCH' && options.body?.profile && !Object.hasOwn(options.body, 'expectedProfileVersion')) {
     const snapshot = await request(path, { cookie: options.cookie });
+    if (snapshot.status >= 500) throw new Error('Profile snapshot request failed: ' + snapshot.status + ' ' + JSON.stringify(snapshot.data));
     options = { ...options, body: { ...options.body, expectedProfileVersion: snapshot.data.account?.profileVersion } };
   }
   const headers = new Headers(options.headers || {});

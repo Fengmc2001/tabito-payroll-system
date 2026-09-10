@@ -9,7 +9,7 @@ import {
   assertGrayMaintenancePreflight,
   assertMonth,
   credentialPath,
-  currentMonthShanghai,
+  currentMonthTokyo,
   grayBaseUrl,
   grayExpectedSalarySpecs,
   loadCredentials,
@@ -18,7 +18,7 @@ import {
 const baseUrl = grayBaseUrl();
 const client = new PayrollClient(baseUrl);
 const credentialDocument = await loadCredentials(baseUrl);
-const month = assertMonth(process.env.PAYROLL_GRAY_MONTH || credentialDocument.month || currentMonthShanghai());
+const month = assertMonth(process.env.PAYROLL_GRAY_MONTH || credentialDocument.month || currentMonthTokyo());
 const credentials = credentialDocument.accounts;
 const credentialByKey = new Map(credentials.map((account) => [account.key, account]));
 const checks = [];
@@ -49,7 +49,7 @@ const admin = sessions.get('lingling');
 check(admin.account.email.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL.toLowerCase(), '空库首账号是固定管理员邮箱');
 const managed = (await client.expect('/api/admin/users', 200, { cookie: admin.cookie })).data.users;
 check(managed.length === accountSpecs.length, `灰度库只有 ${accountSpecs.length} 个预期账号`);
-check(managed.filter((user) => user.workManager).length === 1, '仅泠泠是工作负责人');
+check(managed.filter((user) => user.workManager).length === 2, '泠泠与阿惟为两条审核链的工作负责人');
 check(
   managed.find((user) => user.email.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL.toLowerCase())?.workManager === true,
   '工作负责人对应泠泠账号',
@@ -171,21 +171,29 @@ check(
   '审核员可审核本人申报且审计来源完整',
 );
 
+const aiweiQueue=(await client.expect('/api/review/salary-records',200,{cookie:sessions.get('aiwei').cookie})).data.items;
+check(aiweiQueue.length>0 && aiweiQueue.every(item=>item.record.reviewerUserId===aiweiAccount.id),'阿惟只读取指定给自己的申报');
+check(!aiweiQueue.some(item=>item.record.id===adminOwnRecord.id || item.record.memo.includes(':teacher-d-cny:')),'审核授课不会带出成约提成或另一笔人民币工资');
+const managerAiwei=managed.find(user=>user.id===aiweiAccount.id);
+check(managerAiwei.workManager && managerAiwei.access.reviewerUserId===aiweiAccount.id,'阿惟负责人映射已明确配置');
 const teacherA = sessions.get('teacher-a');
 const reviewer = sessions.get('up');
 await expectForbidden('/api/admin/users', teacherA.cookie, '普通员工不能查看账号权限');
 await expectForbidden('/api/admin/gray-fixtures?detail=1', teacherA.cookie, '普通员工不能查看灰度维护详情');
-await expectForbidden('/api/staff/payroll/users', teacherA.cookie, '普通员工不能为他人申报');
-await expectForbidden('/api/staff/payroll/rules', teacherA.cookie, '普通员工不能查看自动规律');
+const ownTargets = await client.expect('/api/staff/payroll/users',200,{cookie:teacherA.cookie});
+check(ownTargets.data.users.length===1 && ownTargets.data.users[0].id===teacherA.account.id,'普通员工批量申报只能选择本人');
+const ownRules = await client.expect('/api/staff/payroll/rules',200,{cookie:teacherA.cookie});
+check(ownRules.data.rules.every(rule=>rule.userId===teacherA.account.id),'普通员工只能查看本人规律');
 await expectForbidden('/api/admin/gray-fixtures?detail=1', reviewer.cookie, '审核员不能进入破坏性灰度维护接口');
-await client.expect('/api/staff/payroll/users', 200, { cookie: reviewer.cookie });
-check(true, '审核员可查看代申报账号目录');
+const reviewerTargets=await client.expect('/api/staff/payroll/users',200,{cookie:reviewer.cookie});
+check(reviewerTargets.data.users.length===1 && reviewerTargets.data.users[0].id===reviewer.account.id,'审核员不能选择他人代报');
+await expectForbidden('/api/staff/employees', reviewer.cookie, '审核员默认无员工管理');
+await expectForbidden('/api/audit/overview', reviewer.cookie, '审核员默认无总审计');
 
 const bankKey = teacherA.account.profile.bankFileNames[0];
 await client.expect(`/api/files?key=${encodeURIComponent(bankKey)}`, 200, { cookie: teacherA.cookie });
 check(true, '员工可读取自己的附件');
-await client.expect(`/api/files?key=${encodeURIComponent(bankKey)}`, 200, { cookie: reviewer.cookie });
-check(true, '审核员可读取员工附件');
+await expectForbidden(`/api/files?key=${encodeURIComponent(bankKey)}`, reviewer.cookie, '未获完整资料授权的审核员不能读取员工银行附件');
 await client.expect(`/api/files?key=${encodeURIComponent(bankKey)}`, 200, { cookie: admin.cookie });
 check(true, '管理员可读取员工附件');
 

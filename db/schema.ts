@@ -12,12 +12,32 @@ export const payrollUsers = sqliteTable('payroll_users', {
   lastLoginAt: text('last_login_at'),
   failedLoginCount: integer('failed_login_count').notNull().default(0),
   lockedUntil: integer('locked_until'),
+  featuresJson: text('features_json').notNull().default('{}'),
+  reviewerUserId: text('reviewer_user_id'),
   workManager: integer('work_manager', { mode: 'boolean' }).notNull().default(false),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 }, (table) => [
   index('idx_payroll_users_role_status').on(table.role, table.status),
 ]);
+
+export const payrollAccessGrants = sqliteTable('payroll_access_grants', {
+  viewerUserId: text('viewer_user_id').notNull(),
+  subjectUserId: text('subject_user_id').notNull(),
+  createdBy: text('created_by').notNull(),
+  createdAt: text('created_at').notNull(),
+}, (table) => [primaryKey({ columns: [table.viewerUserId, table.subjectUserId] })]);
+
+export const payrollRecordHistory = sqliteTable('payroll_record_history', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  recordId: text('record_id').notNull(),
+  actorUserId: text('actor_user_id'),
+  action: text('action').notNull(),
+  status: integer('status').notNull(),
+  reviewerUserId: text('reviewer_user_id'),
+  dataJson: text('data_json').notNull(),
+  createdAt: text('created_at').notNull(),
+}, (table) => [index('idx_payroll_history_record').on(table.recordId, table.id)]);
 
 export const payrollSessions = sqliteTable('payroll_sessions', {
   token: text('token').primaryKey(),
@@ -34,12 +54,14 @@ export const payrollSalaryRecords = sqliteTable('payroll_salary_records', {
   userId: text('user_id').notNull(),
   status: integer('status').notNull(),
   workDate: text('work_date').notNull(),
+  reviewerUserId: text('reviewer_user_id'),
   finalSalary: integer('final_salary').notNull(),
   currency: text('currency', { enum: ['JPY', 'CNY'] }).notNull().default('JPY'),
   dataJson: text('data_json').notNull(),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 }, (table) => [
+  index('idx_payroll_salary_reviewer_date').on(table.reviewerUserId, table.workDate),
   index('idx_payroll_salary_user_date_created').on(table.userId, table.workDate, table.createdAt),
   index('idx_payroll_salary_status_date_updated').on(table.status, table.workDate, table.updatedAt),
   index('idx_payroll_salary_currency_status_date').on(table.currency, table.status, table.workDate),
@@ -116,6 +138,7 @@ export const payrollSalaryBatches = sqliteTable('payroll_salary_batches', {
 ]);
 
 export const payrollRecurringRules = sqliteTable('payroll_recurring_rules', {
+  executionOwnerUserId: text('execution_owner_user_id'),
   id: text('id').primaryKey(),
   userId: text('user_id').notNull(),
   title: text('title').notNull(),

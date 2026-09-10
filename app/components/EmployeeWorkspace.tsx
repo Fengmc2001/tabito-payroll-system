@@ -13,6 +13,8 @@ import {
   ROLE_LABELS,
   STATUS,
   currentMonth,
+  dateInJapan,
+  formatJapanDateTime,
   monthIsValid,
   emptyCurrencyAmounts,
   getApplyTypeLabel,
@@ -73,7 +75,7 @@ export function EmployeeWorkspace() {
     [detail, month],
   );
   const monthAudit = useMemo(
-    () => detail?.auditLogs.filter((log) => (log.businessMonth ?? (typeof log.detail.businessMonth === 'string' ? log.detail.businessMonth : log.createdAt.slice(0, 7))) === month) ?? [],
+    () => detail?.auditLogs.filter((log) => (log.businessMonth ?? (typeof log.detail.businessMonth === 'string' ? log.detail.businessMonth : dateInJapan(new Date(log.createdAt)).slice(0, 7))) === month) ?? [],
     [detail, month],
   );
   const selectedMonthSummary = detail?.monthlySummaries.find((summary) => summary.month === month);
@@ -126,7 +128,7 @@ export function EmployeeWorkspace() {
               <ProfileCard title="工资收款信息" profile={detail.profile} keys={PAYMENT_PROFILE_KEYS} defaultOpen />
             </div></section>
 
-            <section className="detail-section"><h3>上传文件</h3>{detail.files.length === 0 ? <div className="empty-state">暂无文件。</div> : <div className="file-inventory">{detail.files.map((file) => <a key={file.key} href={appPath(`/api/files?key=${encodeURIComponent(file.key)}`)} target="_blank" rel="noreferrer"><strong>{file.name}</strong><span>{formatFileSize(file.size)} · {new Date(file.createdAt).toLocaleString('zh-CN')}</span></a>)}</div>}</section>
+            <section className="detail-section"><h3>上传文件</h3>{detail.files.length === 0 ? <div className="empty-state">暂无文件。</div> : <div className="file-inventory">{detail.files.map((file) => <a key={file.key} href={appPath(`/api/files?key=${encodeURIComponent(file.key)}`)} target="_blank" rel="noreferrer"><strong>{file.name}</strong><span>{formatFileSize(file.size)} · {formatJapanDateTime(file.createdAt)}</span></a>)}</div>}</section>
 
             <section className="detail-section"><h3>月度工资</h3>{detail.monthlySummaries.length === 0 ? <div className="empty-state">暂无工资记录。</div> : <div className="data-table-wrap"><table className="data-table"><thead><tr><th>月份</th><th>记录</th><th>已申报</th><th>待审</th><th className="table-priority">已通过</th><th>已驳回</th></tr></thead><tbody>{detail.monthlySummaries.map((summary) => <tr key={summary.month}><td>{summary.month}</td><td>{summary.recordCount}</td><td><CurrencyAmountsView amounts={summary.submittedAmounts} /></td><td><CurrencyAmountsView amounts={summary.pendingAmounts} /></td><td className="table-priority"><CurrencyAmountsView amounts={summary.approvedAmounts} /></td><td><CurrencyAmountsView amounts={summary.rejectedAmounts} /></td></tr>)}</tbody></table></div>}</section>
 

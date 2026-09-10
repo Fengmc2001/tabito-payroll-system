@@ -1187,3 +1187,27 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
 @media (prefers-reduced-motion: reduce) {
   .notification-popup { animation: none; }
 }
+/* Account access: choose a person, then set independent permissions. */
+.access-panel { margin: 1.5rem 0; padding: 1.5rem; border: 1px solid #dce2ed; border-radius: 10px; background: #f8fafc; }
+.access-account-picker { display: grid; gap: .5rem; max-width: 36rem; margin-bottom: 1.25rem; font-size: 1rem; }
+.access-panel select, .access-panel input:not([type=checkbox]) { width: 100%; min-height: 42px; padding: .6rem .75rem; border: 1px solid #cbd5e1; border-radius: 6px; background: white; }
+.access-editor__grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.access-card { padding: 1.25rem; background: white; border: 1px solid #dde3ec; border-radius: 8px; margin-bottom: 1rem; }
+.access-card h3 { margin-bottom: .85rem; font-size: 1.1rem; }
+.access-card p, .access-card small { font-size: .875rem; line-height: 1.6; }
+.access-check { display: flex; align-items: center; gap: .7rem; padding: .6rem .25rem; font-size: 1rem; }
+.access-check input { width: 18px; height: 18px; accent-color: #263e73; flex-shrink: 0; }
+.access-check small { display: block; color: #69758a; overflow-wrap: anywhere; }
+.access-targets { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); max-height: 20rem; overflow-y: auto; margin-top: .75rem; }
+.admin-fold { margin: 1rem 0; border-top: 1px solid #dce2ed; padding-top: 1rem; }
+.admin-fold > summary { cursor: pointer; font-size: 1.1rem; font-weight: 700; padding: .5rem 0 1rem; }
+.record-history-list { display: grid; gap: 1rem; }
+.record-history-entry { padding: 1rem; border: 1px solid #dce2ed; border-radius: 6px; }
+.record-history-entry p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.summary-records { margin-top: 1rem; }
+.summary-records > summary { cursor: pointer; padding: 1rem; border: 1px solid #dce2ed; font-size: 1rem; font-weight: 600; }
+.record-detail-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: .75rem; margin: 1rem 0; }
+.record-detail-grid dt { color: #64748b; font-size: .875rem; }
+.record-detail-grid dd { margin: .2rem 0; font-size: 1rem; overflow-wrap: anywhere; }
+@media (max-width: 800px) { .access-editor__grid, .access-targets { grid-template-columns: 1fr; } .record-detail-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } .access-panel { padding: 1rem; } }
+.record-detail-modal { width: min(900px, 94vw); max-height: 90vh; overflow-y: auto; }

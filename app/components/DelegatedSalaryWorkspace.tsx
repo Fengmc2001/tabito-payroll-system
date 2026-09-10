@@ -62,9 +62,11 @@ type DelegatedSelection = {
 export function DelegatedSalaryWorkspace({
   currentUserId,
   mode,
+  selfMode = false,
 }: {
   currentUserId: string;
   mode: 'single' | 'batch';
+  selfMode?: boolean;
 }) {
   const naturalMonth = currentMonth();
   const [month, setMonth] = useState(naturalMonth);
@@ -105,7 +107,7 @@ export function DelegatedSalaryWorkspace({
       apiRequest<{ departments: DepartmentOption[]; workManagers: WorkManagerOption[] }>('/api/payroll-options'),
     ]).then(([userResult, optionResult]) => {
       if (cancelled) return;
-      const others = userResult.users.filter((user) => user.id !== currentUserId);
+      const others = userResult.users.filter((user) => (selfMode ? user.id === currentUserId : user.id !== currentUserId));
       setUsers(others);
       setDepartments(optionResult.departments);
       setWorkManagers(optionResult.workManagers);
@@ -124,7 +126,7 @@ export function DelegatedSalaryWorkspace({
       }
     });
     return () => { cancelled = true; };
-  }, [currentUserId, updateSelection, setNotice]);
+  }, [currentUserId, selfMode, updateSelection, setNotice]);
 
   const fetchTargetData = useCallback(async (selection: DelegatedSelection) => {
     if (!selection.targetUserId) {
@@ -151,7 +153,7 @@ export function DelegatedSalaryWorkspace({
       if (requestRevision.current !== revision || selectionRef.current.revision !== selection.revision) return false;
       setRecords(result.records);
       setRules(result.rules);
-      setUsers(userResult.users.filter((user) => user.id !== currentUserId));
+      setUsers(userResult.users.filter((user) => (selfMode ? user.id === currentUserId : user.id !== currentUserId)));
       setDepartments(optionResult.departments);
       setWorkManagers(optionResult.workManagers);
       if (!quiet) {
@@ -168,7 +170,7 @@ export function DelegatedSalaryWorkspace({
     } finally {
       if (!quiet) setBusy(false);
     }
-  }, [fetchTargetData, currentUserId, setNotice]);
+  }, [fetchTargetData, currentUserId, selfMode, setNotice]);
 
   useEffect(() => {
     const selection = selectionRef.current;
@@ -261,6 +263,18 @@ export function DelegatedSalaryWorkspace({
     }
   };
 
+  const reopenSingle = async (record: SalaryRecord) => {
+    if (busy) return;
+    const selection = selectionRef.current;
+    setBusy(true);
+    try {
+      const result = await apiRequest<{record:SalaryRecord}>(`/api/salary-records/${record.id}/reopen`, {method:'POST',body:{expectedUpdatedAt:record.updatedAt}});
+      if (!await refreshTarget(true, selection.revision)) return;
+      setEditing(result.record); setNoticeTone('success'); setNotice('已退回未提交，可修改后重新申报。');
+    } catch (error) {if (isSelectionCurrent(selection.revision)) {setNoticeTone('error');setNotice(messageFrom(error));}}
+    finally {setBusy(false);}
+  };
+
   const copySingle = (record: SalaryRecord) => {
     const copied = cloneAsDraft(record, targetUserId);
     if (!copied.workDate.startsWith(month)) copied.workDate = `${month}-01`;
@@ -295,6 +309,7 @@ export function DelegatedSalaryWorkspace({
       onEdit={setEditing}
       onCopy={copySingle}
       onDelete={deleteSingle}
+      onReopen={reopenSingle}
     /> : initialized ? <BatchWorkspace
       key={`${targetUserId}:${month}`}
       month={month}
@@ -353,6 +368,7 @@ function SingleWorkspace({
   onEdit,
   onCopy,
   onDelete,
+  onReopen,
 }: {
   month: string;
   setMonth: (value: string) => void;
@@ -370,6 +386,7 @@ function SingleWorkspace({
   onEdit: (record: SalaryRecord) => void;
   onCopy: (record: SalaryRecord) => void;
   onDelete: (id: string) => void;
+  onReopen: (record: SalaryRecord) => void;
 }) {
   const summary = useMemo(() => summarize(records), [records]);
   const drafts = records.filter((record) => record.status === 1);
@@ -403,8 +420,8 @@ function SingleWorkspace({
       <SalaryTable records={drafts} onEdit={onEdit} onCopy={onCopy} onDelete={onDelete} emptyMessage="本月没有未提交记录。" />
     </section>
     <div className="salary-status-sections">
-      <SalaryStatusSection tone="pending" title="待审核" records={pending} onCopy={onCopy} />
-      <SalaryStatusSection tone="rejected" title="已驳回" records={rejected} onCopy={onCopy} />
+      <SalaryStatusSection tone="pending" title="待审核" records={pending} onCopy={onCopy} onReopen={onReopen} />
+      <SalaryStatusSection tone="rejected" title="已驳回" records={rejected} onCopy={onCopy} onReopen={onReopen} />
       <SalaryStatusSection tone="approved" title="已通过" records={approved} onCopy={onCopy} />
     </div>
   </>;
@@ -551,12 +568,12 @@ function BatchWorkspace({
     }
   };
 
-  const updateRule = async (rule: RecurringPayrollRule, active: boolean) => {
+  const updateRule = async (rule: RecurringPayrollRule, active: boolean, takeOver = false) => {
     setBusy(true);
     try {
       await apiRequest(`/api/staff/payroll/rules/${rule.id}`, {
         method: 'PATCH',
-        body: { active, expectedUpdatedAt: rule.updatedAt },
+        body: { active, takeOver, expectedUpdatedAt: rule.updatedAt },
       });
       if (!await refreshTarget(true, selectionRevision)) return;
       setNoticeTone('success');
@@ -615,7 +632,7 @@ function BatchWorkspace({
   const showAmount = [2, 3, 4].includes(template.applyType);
   return <>
     <div className="content-card__heading salary-workspace__heading">
-      <div><h2 className="workspace-panel-title">他人多条申报</h2></div>
+      <div><h2 className="workspace-panel-title">{targetUserId === currentUserId ? '本人批量申报' : '他人多条申报'}</h2></div>
       <div className="heading-actions">
         <button type="button" className="secondary-button button-with-icon" disabled={busy} onClick={() => void refreshTarget()}><RefreshCw size={15} />刷新</button>
         <TargetPicker users={users} value={targetUserId} onChange={setTargetUserId} disabled={busy} />
@@ -742,15 +759,16 @@ function BatchWorkspace({
         <button type="button" className="secondary-button button-with-icon" disabled={busy || rules.length === 0} onClick={() => void runRules()}><CalendarClock size={15} />补执行本月</button>
       </div>
       {rules.length === 0 ? <div className="empty-state empty-state--compact">该员工还没有自动规律。</div> : <div className="recurring-rule-list">
-        {rules.map((rule) => <article key={rule.id} className={rule.active ? 'recurring-rule-card' : 'recurring-rule-card is-paused'}>
+        {rules.map((rule) => <article key={rule.id} className={rule.active && !rule.executionBlocked ? 'recurring-rule-card' : 'recurring-rule-card is-paused'}>
           <div>
             <strong>{rule.title}</strong>
             <span>{formatRuleSchedule(rule)} · {getDepartmentLabel(rule.template.departmentKey, rule.template.departmentLabel)} · {rule.submit ? '自动提交' : '保存未提交'}</span>
-            <small>{rule.lastRunMessage || '尚未执行'}</small>
+            <small>{rule.executionBlocked ? '已停止执行：原创建人已无申报权限。' : rule.lastRunMessage || '尚未执行'}</small>
           </div>
           <Money amount={rule.template.finalSalary} currency={rule.template.currency} />
           <div className="row-actions recurring-rule-actions">
-            <button type="button" disabled={busy} onClick={() => void updateRule(rule, !rule.active)}>{rule.active ? <Pause size={14} /> : <Play size={14} />}{rule.active ? '暂停' : '启用'}</button>
+            {rule.executionBlocked && <button type="button" disabled={busy} onClick={() => void updateRule(rule, true, true)}>接管并启用</button>}
+            <button type="button" disabled={busy || Boolean(rule.executionBlocked && !rule.active)} onClick={() => void updateRule(rule, !rule.active)}>{rule.active ? <Pause size={14} /> : <Play size={14} />}{rule.active ? '暂停' : '启用'}</button>
             <button type="button" className="danger-text" disabled={busy} onClick={() => void deleteRule(rule)}><Trash2 size={14} />删除</button>
           </div>
         </article>)}

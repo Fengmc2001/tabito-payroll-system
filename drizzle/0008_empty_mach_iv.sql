@@ -1,0 +1,1 @@
+ALTER TABLE `payroll_recurring_rules` ADD `execution_owner_user_id` text;

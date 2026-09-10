@@ -1,3 +1,5 @@
+import { accountAccess, featuresFromStored, fileAccessSql, fullAccessSql, recordAccessSql, reviewAccessSql, requireFeature, requireFullAccess, requirePayrollTarget, recordLifecycleStatements, sqlText } from './access-control';
+import { AccountAccess, RecordHistoryItem } from '../payroll';
 import { env } from 'cloudflare:workers';
 import { accountAuditQuery } from '../account-audit-query';
 import {
@@ -46,6 +48,8 @@ import {
 } from '../payroll';
 
 type UserRow = {
+  features_json?: string;
+  reviewer_user_id?: string | null;
   id: string;
   email: string;
   password_digest: string;
@@ -61,6 +65,7 @@ type UserRow = {
 };
 
 type RecordRow = {
+  reviewer_user_id?: string | null;
   id: string;
   user_id: string;
   status: number;
@@ -132,6 +137,8 @@ type RecurringRuleRow = {
   template_json: string;
   schedule_json: string;
   created_by_user_id: string;
+  execution_owner_user_id?: string | null;
+  execution_allowed?: number;
   creator_email: string | null;
   creator_profile_json: string | null;
   last_run_at: string | null;
@@ -183,6 +190,9 @@ async function database() {
 async function initializeSchema(db: D1Database) {
   try {
     await db.prepare(`SELECT
+      u.features_json,
+      u.reviewer_user_id,
+      s.reviewer_user_id,
       u.work_manager,
       u.failed_login_count,
       session.expires_at,
@@ -193,10 +203,13 @@ async function initializeSchema(db: D1Database) {
       a.business_month,
       b.payload_hash,
       r.submit_on_generate,
+      r.execution_owner_user_id,
       instance.record_ids_json,
       f.reference_type,
       d.deleted_at,
-      seed.seed_tag
+      seed.seed_tag,
+      access_grant.viewer_user_id,
+      history.record_id
     FROM payroll_users AS u
     LEFT JOIN payroll_sessions AS session ON 1 = 0
     LEFT JOIN payroll_salary_records AS s ON 1 = 0
@@ -208,6 +221,8 @@ async function initializeSchema(db: D1Database) {
     LEFT JOIN payroll_recurring_instances AS instance ON 1 = 0
     LEFT JOIN payroll_file_references AS f ON 1 = 0
     LEFT JOIN payroll_departments AS d ON 1 = 0
+    LEFT JOIN payroll_access_grants AS access_grant ON 1 = 0
+    LEFT JOIN payroll_record_history AS history ON 1 = 0
     LEFT JOIN payroll_seed_entities AS seed ON 1 = 0
     LIMIT 0`).all();
   } catch (error) {
@@ -414,6 +429,7 @@ export async function getAccount(userId: string) {
   const user = await getUserById(userId);
   if (!user) throw new ApiError(404, '未找到用户。');
   const account = toAccount(user);
+  account.access = await accountAccess(await database(), userId, toRole(user.role));
   account.profileVersion = await sha256Hex(user.profile_json);
   account.salaryRecords = await listSalaryRecords(userId);
   return account;
@@ -490,7 +506,7 @@ export async function resetPassword(
 
 export async function listSalaryRecords(userId: string) {
   const db = await database();
-  const result = await db.prepare(`SELECT id, user_id, status, currency, data_json
+  const result = await db.prepare(`SELECT id, user_id, status, currency, reviewer_user_id, data_json
     FROM payroll_salary_records
     WHERE user_id = ?
     ORDER BY work_date DESC, created_at DESC`)
@@ -501,7 +517,7 @@ export async function listSalaryRecords(userId: string) {
 
 export async function getSalaryRecord(userId: string, id: string) {
   const db = await database();
-  const row = await db.prepare(`SELECT id, user_id, status, currency, data_json
+  const row = await db.prepare(`SELECT id, user_id, status, currency, reviewer_user_id, data_json
     FROM payroll_salary_records WHERE id = ? AND user_id = ?`)
     .bind(id, userId)
     .first<RecordRow>();
@@ -516,7 +532,7 @@ export async function saveSalaryRecord(userId: string, input: SalaryRecord) {
   const db = await database();
   const owner = await getUserById(userId);
   if (!owner) throw new ApiError(404, '未找到用户。');
-  const anyOwner = await db.prepare('SELECT id, user_id, status, currency, data_json FROM payroll_salary_records WHERE id = ?')
+  const anyOwner = await db.prepare('SELECT id, user_id, status, currency, reviewer_user_id, data_json FROM payroll_salary_records WHERE id = ?')
     .bind(input.id)
     .first<RecordRow>();
   if (anyOwner && anyOwner.user_id !== userId) throw new ApiError(403, '没有操作该工资记录的权限。');
@@ -545,6 +561,7 @@ export async function saveSalaryRecord(userId: string, input: SalaryRecord) {
         record.id, userId, existing.updatedAt, userId)];
     statements.push(changedSalaryAuditStatement(db, auditId, userId, 'salary.update', record.id, auditDetail, record.updatedAt));
     statements.push(...conditionalSalaryFileReferenceStatements(db, userId, record.id, record.attachments, auditId));
+    statements.push(...recordLifecycleStatements(db, [record.id], auditId));
     const [mutation] = await db.batch(statements);
     if (!mutation.meta.changes) throw new ApiError(409, '该记录已经发生变化，请刷新后重试。');
   } else {
@@ -556,6 +573,7 @@ export async function saveSalaryRecord(userId: string, input: SalaryRecord) {
         record.createdAt, record.updatedAt, userId)];
     statements.push(changedSalaryAuditStatement(db, auditId, userId, 'salary.create', record.id, auditDetail, record.updatedAt));
     statements.push(...conditionalSalaryFileReferenceStatements(db, userId, record.id, record.attachments, auditId));
+    statements.push(...recordLifecycleStatements(db, [record.id], auditId));
     const [mutation] = await db.batch(statements);
     if (!mutation.meta.changes) throw new ApiError(409, '账号状态已发生变化，请刷新后重试。');
   }
@@ -566,6 +584,7 @@ export async function deleteSalaryRecord(userId: string, id: string, expectedUpd
   const db = await database();
   const existing = await getSalaryRecord(userId, id);
   if (existing.status !== 1) throw new ApiError(409, '仅未提交记录可以删除。');
+  if (await db.prepare("SELECT id FROM payroll_record_history WHERE record_id = ? AND status != 1 LIMIT 1").bind(id).first()) throw new ApiError(409, '这条记录已有提交或审批历史，不能删除；可修改后重新申报。');
   if (!expectedUpdatedAt || expectedUpdatedAt !== existing.updatedAt) {
     throw new ApiError(409, '该记录已经发生变化，请刷新后重试。');
   }
@@ -582,7 +601,7 @@ export async function applySalaryRecords(userId: string, requestedMonth?: string
   if (profileError) throw new ApiError(400, profileError);
   const month = requestedMonth ?? currentMonth();
   if (!monthIsValid(month)) throw new ApiError(400, '申报月份格式无效。');
-  const draftRows = await db.prepare(`SELECT id, user_id, status, currency, data_json
+  const draftRows = await db.prepare(`SELECT id, user_id, status, currency, reviewer_user_id, data_json
     FROM payroll_salary_records
     WHERE user_id = ? AND status = 1 AND work_date LIKE ?
     ORDER BY work_date ASC, created_at ASC`)
@@ -636,6 +655,7 @@ export async function applySalaryRecords(userId: string, requestedMonth?: string
       SELECT ?, ?, 'salary.submit', 'user', ?, ?, ?, ?, ?
       WHERE changes() = ?`)
       .bind(auditId, userId, userId, JSON.stringify(auditDetail), userId, month, now, drafts.length),
+    ...recordLifecycleStatements(db, recordIds, auditId, true),
   ]);
   if (Number(mutation.meta.changes ?? 0) !== drafts.length) {
     throw new ApiError(409, '工资记录已经发生变化，请刷新后重新提交。');
@@ -644,18 +664,17 @@ export async function applySalaryRecords(userId: string, requestedMonth?: string
 }
 
 export async function listProxyPayrollUsers(actor: SessionActor): Promise<ManagedUser[]> {
-  requireRole(actor, ['reviewer', 'admin']);
   const db = await database();
-  const result = await db.prepare('SELECT * FROM payroll_users ORDER BY created_at ASC').all<UserRow>();
+  const result = await db.prepare(`SELECT * FROM payroll_users WHERE ${actor.role === 'admin' ? '1' : 'id = ' + sqlText(actor.userId)} ORDER BY created_at ASC`).all<UserRow>();
   return result.results.map(toManagedUser);
 }
 
 export async function listProxySalaryRecords(actor: SessionActor, targetUserId: string, requestedMonth: string) {
-  requireRole(actor, ['reviewer', 'admin']);
+  requirePayrollTarget(actor, targetUserId);
   const month = requireMonth(requestedMonth);
   const db = await database();
   await requireTargetUser(db, targetUserId, false);
-  const result = await db.prepare(`SELECT id, user_id, status, currency, data_json
+  const result = await db.prepare(`SELECT id, user_id, status, currency, reviewer_user_id, data_json
     FROM payroll_salary_records WHERE user_id = ? AND work_date LIKE ?
     ORDER BY work_date DESC, created_at DESC`)
     .bind(targetUserId, `${month}-%`)
@@ -669,7 +688,7 @@ export async function saveProxySalaryRecord(
   input: SalaryRecord,
   submit: boolean,
 ) {
-  requireRole(actor, ['reviewer', 'admin']);
+  requireRole(actor, ['admin']);
   if (actor.userId === targetUserId) throw new ApiError(400, '请在“本人申报”中处理自己的工资。');
   if (!input || typeof input !== 'object' || input.userId !== targetUserId) {
     throw new ApiError(400, '工资记录归属无效。');
@@ -677,7 +696,7 @@ export async function saveProxySalaryRecord(
   const db = await database();
   const target = await requireTargetUser(db, targetUserId, true);
   if (submit) requireSubmittableProfile(target);
-  const anyOwner = await db.prepare('SELECT id, user_id, status, currency, data_json FROM payroll_salary_records WHERE id = ?')
+  const anyOwner = await db.prepare('SELECT id, user_id, status, currency, reviewer_user_id, data_json FROM payroll_salary_records WHERE id = ?')
     .bind(input.id)
     .first<RecordRow>();
   if (anyOwner && anyOwner.user_id !== targetUserId) throw new ApiError(403, '没有操作该工资记录的权限。');
@@ -713,7 +732,7 @@ export async function saveProxySalaryRecord(
       data_json = ?, updated_at = ? WHERE id = ? AND user_id = ? AND status = 1 AND updated_at = ?
         AND EXISTS (SELECT 1 FROM payroll_users WHERE id = ? AND status = 'active')
         AND EXISTS (SELECT 1 FROM payroll_users
-          WHERE id = ? AND status = 'active' AND role IN ('reviewer', 'admin'))`)
+          WHERE id = ? AND status = 'active' AND role = 'admin')`)
       .bind(record.status, record.workDate, record.finalSalary, record.currency, serialized, now,
         record.id, targetUserId, existing.updatedAt, targetUserId, actor.userId)];
     statements.push(changedSalaryAuditStatement(
@@ -726,6 +745,7 @@ export async function saveProxySalaryRecord(
       now,
     ));
     statements.push(...conditionalSalaryFileReferenceStatements(db, targetUserId, record.id, record.attachments, auditId));
+    statements.push(...recordLifecycleStatements(db, [record.id], auditId, submit));
     const [mutation] = await db.batch(statements);
     if (!mutation.meta.changes) throw new ApiError(409, '该记录已经发生变化，请刷新后重试。');
   } else {
@@ -734,7 +754,7 @@ export async function saveProxySalaryRecord(
       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
       WHERE EXISTS (SELECT 1 FROM payroll_users WHERE id = ? AND status = 'active')
         AND EXISTS (SELECT 1 FROM payroll_users
-          WHERE id = ? AND status = 'active' AND role IN ('reviewer', 'admin'))`)
+          WHERE id = ? AND status = 'active' AND role = 'admin')`)
       .bind(record.id, targetUserId, record.status, record.workDate, record.finalSalary, record.currency,
         serialized, record.createdAt, now, targetUserId, actor.userId)];
     statements.push(changedSalaryAuditStatement(
@@ -747,6 +767,7 @@ export async function saveProxySalaryRecord(
       now,
     ));
     statements.push(...conditionalSalaryFileReferenceStatements(db, targetUserId, record.id, record.attachments, auditId));
+    statements.push(...recordLifecycleStatements(db, [record.id], auditId, submit));
     const [mutation] = await db.batch(statements);
     if (!mutation.meta.changes) throw new ApiError(409, '账号状态已发生变化，请刷新后重试。');
   }
@@ -759,11 +780,12 @@ export async function deleteProxySalaryRecord(
   id: string,
   expectedUpdatedAt?: string,
 ) {
-  requireRole(actor, ['reviewer', 'admin']);
+  requireRole(actor, ['admin']);
   const db = await database();
   await requireTargetUser(db, targetUserId, false);
   const existing = await salaryRecordForOwner(db, targetUserId, id);
   if (existing.status !== 1) throw new ApiError(409, '仅未提交记录可以删除。');
+  if (await db.prepare("SELECT id FROM payroll_record_history WHERE record_id = ? AND status != 1 LIMIT 1").bind(id).first()) throw new ApiError(409, '这条记录已有提交或审批历史，不能删除；可修改后重新申报。');
   if (!expectedUpdatedAt || expectedUpdatedAt !== existing.updatedAt) {
     throw new ApiError(409, '该记录已经发生变化，请刷新后重试。');
   }
@@ -778,11 +800,10 @@ export async function deleteProxySalaryRecord(
 }
 
 export async function createProxyPayrollBatch(actor: SessionActor, input: ProxyPayrollBatchInput) {
-  requireRole(actor, ['reviewer', 'admin']);
   const requestId = cleanStringStrict(input?.requestId, 120, '批次请求编号');
   if (!/^batch-request-[a-zA-Z0-9-]{8,100}$/.test(requestId)) throw new ApiError(400, '批次请求编号无效。');
   const targetUserId = cleanStringStrict(input?.targetUserId, 120, '申报对象');
-  if (actor.userId === targetUserId) throw new ApiError(400, '请在“本人申报”中处理自己的工资。');
+  requirePayrollTarget(actor, targetUserId);
   const month = requireMonth(input?.month);
   const payloadHash = await hashProxyPayrollBatchInput(input);
   const db = await database();
@@ -832,7 +853,7 @@ export async function createProxyPayrollBatch(actor: SessionActor, input: ProxyP
       createdByName: actorName,
       submittedByUserId: input.submit ? actor.userId : '',
       submittedByName: input.submit ? actorName : '',
-      source: 'proxy-batch',
+      source: actor.userId === targetUserId ? 'self' : 'proxy-batch',
       batchId,
       recurringRuleId: ruleId,
     });
@@ -848,7 +869,7 @@ export async function createProxyPayrollBatch(actor: SessionActor, input: ProxyP
       SELECT ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, 'success', ?, ?, ?, NULL
       WHERE EXISTS (SELECT 1 FROM payroll_users WHERE id = ? AND status = 'active')
         AND EXISTS (SELECT 1 FROM payroll_users
-          WHERE id = ? AND status = 'active' AND role IN ('reviewer', 'admin'))`)
+          WHERE id = ? AND status = 'active' AND (role = 'admin' OR id = ${sqlText(targetUserId)}))`)
       .bind(ruleId, targetUserId, recurring.title, input.submit ? 1 : 0, recurring.startMonth, recurring.endMonth,
         JSON.stringify(records[0]), JSON.stringify(schedule.fixedSchedule), actor.userId,
         now, `已生成 ${month} 的 ${records.length} 条记录。`, now, now, targetUserId, actor.userId));
@@ -881,10 +902,11 @@ export async function createProxyPayrollBatch(actor: SessionActor, input: ProxyP
     (id, request_id, actor_user_id, target_user_id, payload_hash, record_ids_json, created_at)
     SELECT ?, ?, ?, ?, ?, ?, ?
     WHERE EXISTS (SELECT 1 FROM payroll_users
-      WHERE id = ? AND status = 'active' AND role IN ('reviewer', 'admin'))
+      WHERE id = ? AND status = 'active' AND (role = 'admin' OR id = ${sqlText(targetUserId)}))
       AND EXISTS (SELECT 1 FROM payroll_users WHERE id = ? AND status = 'active')`)
     .bind(batchId, requestId, actor.userId, targetUserId, payloadHash,
       JSON.stringify(records.map((record) => record.id)), now, actor.userId, targetUserId));
+  const batchAuditId = newId('audit');
   statements.push(auditStatement(
     db,
     actor.userId,
@@ -898,6 +920,7 @@ export async function createProxyPayrollBatch(actor: SessionActor, input: ProxyP
       recurringRuleId: ruleId,
     },
     now,
+    batchAuditId,
   ));
   if (ruleId) {
     statements.push(auditStatement(db, actor.userId, 'salary.rule_create', 'recurring_rule', ruleId, {
@@ -907,6 +930,7 @@ export async function createProxyPayrollBatch(actor: SessionActor, input: ProxyP
       submit: Boolean(input.submit),
     }, now));
   }
+  statements.push(...recordLifecycleStatements(db, recordIds, batchAuditId, Boolean(input.submit)));
   try {
     const [recordInsertion] = await db.batch(statements);
     if (Number(recordInsertion.meta.changes ?? 0) !== records.length) {
@@ -926,11 +950,13 @@ export async function createProxyPayrollBatch(actor: SessionActor, input: ProxyP
 }
 
 export async function listRecurringPayrollRules(actor: SessionActor, targetUserId?: string) {
-  requireRole(actor, ['reviewer', 'admin']);
+  if (actor.role !== 'admin') { requirePayrollTarget(actor, targetUserId || actor.userId); targetUserId = actor.userId; }
   const db = await database();
   const where = targetUserId ? 'WHERE r.user_id = ? AND r.deleted_at IS NULL' : 'WHERE r.deleted_at IS NULL';
   const statement = db.prepare(`SELECT r.*, u.email AS user_email, u.profile_json AS user_profile_json,
-    c.email AS creator_email, c.profile_json AS creator_profile_json
+    c.email AS creator_email, c.profile_json AS creator_profile_json,
+    EXISTS (SELECT 1 FROM payroll_users execution_actor WHERE execution_actor.id = COALESCE(r.execution_owner_user_id, r.created_by_user_id)
+      AND execution_actor.status = 'active' AND (execution_actor.role = 'admin' OR execution_actor.id = r.user_id)) AS execution_allowed
     FROM payroll_recurring_rules r
     JOIN payroll_users u ON u.id = r.user_id
     LEFT JOIN payroll_users c ON c.id = r.created_by_user_id
@@ -944,11 +970,12 @@ export async function listRecurringPayrollRules(actor: SessionActor, targetUserI
 export async function updateRecurringPayrollRule(
   actor: SessionActor,
   id: string,
-  input: { active?: boolean; title?: string; endMonth?: string; expectedUpdatedAt?: string },
+  input: { active?: boolean; title?: string; endMonth?: string; expectedUpdatedAt?: string; takeOver?: boolean },
 ) {
-  requireRole(actor, ['reviewer', 'admin']);
+
   const db = await database();
   const existing = await recurringRuleRow(db, id);
+  requirePayrollTarget(actor, existing.user_id);
   if (!input.expectedUpdatedAt || input.expectedUpdatedAt !== existing.updated_at) {
     throw new ApiError(409, '该规律已发生变化，请刷新后重试。');
   }
@@ -956,20 +983,27 @@ export async function updateRecurringPayrollRule(
   if (!title) throw new ApiError(400, '请填写规律名称。');
   const endMonth = input.endMonth === undefined ? existing.end_month : cleanStringStrict(input.endMonth, 7, '结束月份');
   if (endMonth && (!monthIsValid(endMonth) || endMonth < existing.start_month)) throw new ApiError(400, '结束月份无效。');
-  const active = input.active === undefined ? Boolean(existing.active) : Boolean(input.active);
+  if ((input.active !== undefined && typeof input.active !== 'boolean') || (input.takeOver !== undefined && typeof input.takeOver !== 'boolean')) throw new ApiError(400, '规律设置格式无效。');
+  const active = input.active === undefined ? Boolean(existing.active) : input.active;
+  const executionOwner = input.takeOver ? actor.userId : existing.execution_owner_user_id ?? null;
+  if (active && !input.takeOver && !existing.execution_allowed) throw new ApiError(409, '原创建人已无申报权限，请先接管该规律。');
   const now = nextVersionTimestamp(existing.updated_at);
   const auditId = newId('audit');
   const detail = {
     subjectUserId: existing.user_id,
     title,
     active,
+    previousExecutionOwner: existing.execution_owner_user_id ?? existing.created_by_user_id,
+    executionOwner: executionOwner ?? existing.created_by_user_id,
+    takeOver: Boolean(input.takeOver),
   };
   const [mutation] = await db.batch([
-    db.prepare(`UPDATE payroll_recurring_rules SET title = ?, active = ?, end_month = ?, updated_at = ?
+    db.prepare(`UPDATE payroll_recurring_rules SET title = ?, active = ?, end_month = ?, updated_at = ?, execution_owner_user_id = ?
       WHERE id = ? AND deleted_at IS NULL AND updated_at = ?
         AND EXISTS (SELECT 1 FROM payroll_users
-          WHERE id = ? AND status = 'active' AND role IN ('reviewer', 'admin'))`)
-      .bind(title, active ? 1 : 0, endMonth, now, id, existing.updated_at, actor.userId),
+          WHERE id = ? AND status = 'active' AND (role = 'admin' OR id = ${sqlText(existing.user_id)}))
+        AND (? = 0 OR EXISTS (SELECT 1 FROM payroll_users author WHERE author.id = ? AND author.status = 'active' AND (author.role = 'admin' OR author.id = payroll_recurring_rules.user_id)))`)
+      .bind(title, active ? 1 : 0, endMonth, now, executionOwner, id, existing.updated_at, actor.userId, active ? 1 : 0, executionOwner ?? existing.created_by_user_id),
     db.prepare(`INSERT INTO payroll_audit_logs
       (id, actor_user_id, action, target_type, target_id, detail_json, subject_user_id, business_month, created_at)
       SELECT ?, ?, ?, 'recurring_rule', ?, ?, ?, NULL, ? WHERE changes() = 1`)
@@ -981,9 +1015,10 @@ export async function updateRecurringPayrollRule(
 }
 
 export async function deleteRecurringPayrollRule(actor: SessionActor, id: string, expectedUpdatedAt?: string) {
-  requireRole(actor, ['reviewer', 'admin']);
+
   const db = await database();
   const existing = await recurringRuleRow(db, id);
+  requirePayrollTarget(actor, existing.user_id);
   if (!expectedUpdatedAt || expectedUpdatedAt !== existing.updated_at) {
     throw new ApiError(409, '该规律已发生变化，请刷新后重试。');
   }
@@ -997,7 +1032,7 @@ export async function deleteRecurringPayrollRule(actor: SessionActor, id: string
     db.prepare(`UPDATE payroll_recurring_rules SET active = 0, deleted_at = ?, updated_at = ?
       WHERE id = ? AND deleted_at IS NULL AND updated_at = ?
         AND EXISTS (SELECT 1 FROM payroll_users
-          WHERE id = ? AND status = 'active' AND role IN ('reviewer', 'admin'))`)
+          WHERE id = ? AND status = 'active' AND (role = 'admin' OR id = ${sqlText(existing.user_id)}))`)
       .bind(now, now, id, existing.updated_at, actor.userId),
     db.prepare(`INSERT INTO payroll_audit_logs
       (id, actor_user_id, action, target_type, target_id, detail_json, subject_user_id, business_month, created_at)
@@ -1013,12 +1048,15 @@ export async function runDueRecurringPayrollRules(
   targetUserId?: string,
   actor: SessionActor | null = null,
 ) {
-  const month = requestedMonth ? requireMonth(requestedMonth) : tokyoMonth();
+  const month = requestedMonth ? requireMonth(requestedMonth) : currentMonth();
   const db = await database();
+  if (actor && actor.role !== 'admin') { requirePayrollTarget(actor, targetUserId || actor.userId); targetUserId = actor.userId; }
   if (targetUserId) await requireTargetUser(db, targetUserId, false);
   const submitterName = actor ? await actorDisplayName(db, actor) : '系统自动';
   const result = await db.prepare(`SELECT r.*, u.email AS user_email, u.profile_json AS user_profile_json,
     u.status AS user_status, c.email AS creator_email, c.profile_json AS creator_profile_json,
+    EXISTS (SELECT 1 FROM payroll_users execution_actor WHERE execution_actor.id = COALESCE(r.execution_owner_user_id, r.created_by_user_id)
+      AND execution_actor.status = 'active' AND (execution_actor.role = 'admin' OR execution_actor.id = r.user_id)) AS execution_allowed,
     i.rule_id AS instance_rule_id
     FROM payroll_recurring_rules r
     JOIN payroll_users u ON u.id = r.user_id
@@ -1026,6 +1064,8 @@ export async function runDueRecurringPayrollRules(
     LEFT JOIN payroll_recurring_instances i ON i.rule_id = r.id AND i.month = ?
     WHERE r.active = 1 AND r.deleted_at IS NULL AND r.start_month <= ?
       AND (r.end_month = '' OR r.end_month >= ?)
+      AND EXISTS (SELECT 1 FROM payroll_users author WHERE author.id = COALESCE(r.execution_owner_user_id, r.created_by_user_id)
+        AND author.status = 'active' AND (author.role = 'admin' OR author.id = r.user_id))
       AND (? = '' OR r.user_id = ?)
     ORDER BY CASE WHEN i.rule_id IS NULL THEN 0 ELSE 1 END, r.updated_at ASC, r.created_at ASC
     LIMIT ?`).bind(month, month, month, targetUserId ?? '', targetUserId ?? '', MAX_RECURRING_RULES_PER_RUN)
@@ -1110,10 +1150,11 @@ export async function runDueRecurringPayrollRules(
             AND current.updated_at = ? AND current.start_month <= ?
             AND (current.end_month = '' OR current.end_month >= ?)
             AND owner.status = 'active'
+            AND EXISTS (SELECT 1 FROM payroll_users creator WHERE creator.id = COALESCE(current.execution_owner_user_id, current.created_by_user_id) AND creator.status = 'active' AND (creator.role = 'admin' OR creator.id = current.user_id))
         ) AND (? IS NULL OR EXISTS (
           SELECT 1 FROM payroll_users current_actor
           WHERE current_actor.id = ? AND current_actor.status = 'active'
-            AND current_actor.role IN ('reviewer', 'admin')
+            AND (current_actor.role = 'admin' OR current_actor.id = ${sqlText(targetUserId || '')})
         )) AND NOT EXISTS (
           SELECT 1 FROM payroll_recurring_instances existing
           WHERE existing.rule_id = ? AND existing.month = ?
@@ -1137,6 +1178,7 @@ export async function runDueRecurringPayrollRules(
             AND instance.record_ids_json = ? AND instance.created_at = ?
         )`).bind(auditId, actor?.userId ?? null, rule.id, JSON.stringify(auditDetail), rule.userId, month, runAt,
         rule.id, month, recordIdsJson, runAt));
+      statements.push(...recordLifecycleStatements(db, recordIds, auditId, rule.submit));
       try {
         const [claimResult] = await db.batch(statements);
         if (!claimResult.meta.changes) {
@@ -1181,7 +1223,7 @@ export async function runDueRecurringPayrollRules(
 }
 
 export async function runRecurringPayrollRulesManually(actor: SessionActor, requestedMonth?: string, targetUserId?: string) {
-  requireRole(actor, ['reviewer', 'admin']);
+  if (actor.role !== 'admin') { requirePayrollTarget(actor, targetUserId || actor.userId); targetUserId = actor.userId; }
   return runDueRecurringPayrollRules(requestedMonth, 'manual', targetUserId, actor);
 }
 
@@ -1194,23 +1236,24 @@ export async function listReviewSalaryRecords(
   const allowedStatuses: SalaryStatus[] = [2, 3, 4];
   if (status && !allowedStatuses.includes(status)) throw new ApiError(400, '审核状态筛选无效。');
   const query = status
-    ? `SELECT r.id, r.user_id, r.status, r.currency, r.data_json, u.email, u.profile_json
+    ? `SELECT r.id, r.user_id, r.status, r.currency, r.reviewer_user_id, r.data_json, u.email, u.profile_json
        FROM payroll_salary_records r JOIN payroll_users u ON u.id = r.user_id
-       WHERE r.status = ? ORDER BY r.work_date DESC, r.updated_at DESC`
-    : `SELECT r.id, r.user_id, r.status, r.currency, r.data_json, u.email, u.profile_json
+       WHERE r.status = ? AND ${reviewAccessSql(actor)} ORDER BY r.work_date DESC, r.updated_at DESC`
+    : `SELECT r.id, r.user_id, r.status, r.currency, r.reviewer_user_id, r.data_json, u.email, u.profile_json
        FROM payroll_salary_records r JOIN payroll_users u ON u.id = r.user_id
-       WHERE r.status IN (2, 3, 4) ORDER BY r.status ASC, r.work_date DESC, r.updated_at DESC`;
+       WHERE r.status IN (2, 3, 4) AND ${reviewAccessSql(actor)} ORDER BY r.status ASC, r.work_date DESC, r.updated_at DESC`;
   const statement = db.prepare(query);
   const result = status
     ? await statement.bind(status).all<ReviewRow>()
     : await statement.all<ReviewRow>();
-  return result.results.map((row) => ({
+  const records = await withReviewerNames(db, result.results.map(recordFromRow));
+  return result.results.map((row, index) => ({
     user: {
       id: row.user_id,
       email: row.email,
       displayName: profileDisplayName(parseProfile(row.profile_json), row.email),
     },
-    record: recordFromRow(row),
+    record: records[index],
   }));
 }
 
@@ -1219,18 +1262,22 @@ export async function reviewSalaryRecord(
   id: string,
   decision: 'approve' | 'reject',
   auditMemo: string,
+  expectedUpdatedAt?: string,
 ) {
   requireRole(actor, ['reviewer', 'admin']);
   if (!['approve', 'reject'].includes(decision)) throw new ApiError(400, '审核动作无效。');
   const memo = cleanStringStrict(auditMemo, 1000, '审核备注');
   if (decision === 'reject' && !memo) throw new ApiError(400, '驳回时必须填写审核备注。');
   const db = await database();
-  const row = await db.prepare('SELECT id, user_id, status, currency, data_json FROM payroll_salary_records WHERE id = ?')
+  const row = await db.prepare('SELECT id, user_id, status, currency, reviewer_user_id, data_json FROM payroll_salary_records WHERE id = ?')
     .bind(id)
     .first<RecordRow>();
   if (!row) throw new ApiError(404, '未找到工资记录。');
+  if (!await db.prepare(`SELECT r.id FROM payroll_salary_records r WHERE r.id = ? AND ${reviewAccessSql(actor)}`).bind(id).first()) throw new ApiError(403, '该申报未分配给你审核。');
   const existing = recordFromRow(row);
   if (existing.status !== 2) throw new ApiError(409, '只有待审核记录可以执行审核。');
+  if (!expectedUpdatedAt) throw new ApiError(400, '缺少申报版本，请刷新后审核。');
+  if (expectedUpdatedAt !== existing.updatedAt) throw new ApiError(409, '申报或审核分配已变化，请刷新核对后审核。');
   const now = nextVersionTimestamp(existing.updatedAt);
   const status: SalaryStatus = decision === 'approve' ? 3 : 4;
   const record: SalaryRecord = { ...existing, status, checkDate: now, auditMemo: memo, updatedAt: now };
@@ -1244,7 +1291,7 @@ export async function reviewSalaryRecord(
   const [result] = await db.batch([
     db.prepare(`UPDATE payroll_salary_records
       SET status = ?, data_json = ?, updated_at = ?
-      WHERE id = ? AND status = 2 AND updated_at = ?
+      WHERE id = ? AND status = 2 AND updated_at = ? AND ${reviewAccessSql(actor, 'payroll_salary_records')}
         AND EXISTS (SELECT 1 FROM payroll_users
           WHERE id = ? AND status = 'active' AND role IN ('reviewer', 'admin'))`)
       .bind(status, JSON.stringify(record), now, id, existing.updatedAt, actor.userId),
@@ -1253,16 +1300,144 @@ export async function reviewSalaryRecord(
       SELECT ?, ?, ?, 'salary_record', ?, ?, ?, ?, ? WHERE changes() = 1`)
       .bind(auditId, actor.userId, `salary.${decision}`, id, JSON.stringify(auditDetail),
         subjectUserId, businessMonth, now),
+    ...recordLifecycleStatements(db, [id], auditId),
   ]);
   if (!result.meta.changes) throw new ApiError(409, '该记录已被其他审核员处理，请刷新。');
   return record;
+}
+
+export async function updateAccountAccess(actor: SessionActor, userId: string, input: AccountAccess & { expectedUpdatedAt: string }) {
+  requireRole(actor, ['admin']);
+  const db = await database();
+  const target = await getUserById(userId);
+  if (!target) throw new ApiError(404, '账号不存在。');
+  if (!input || input.expectedUpdatedAt !== target.updated_at) throw new ApiError(409, '账号配置已变化，请刷新后重试。');
+  if (!input.features || ['summary','employees','audit'].some((key) => typeof input.features[key as keyof AccountAccess['features']] !== 'boolean')) throw new ApiError(400, '功能权限格式错误。');
+  if (!Array.isArray(input.subjectUserIds) || input.subjectUserIds.length > 500 || input.subjectUserIds.some((id) => typeof id !== 'string' || !id || id === userId)) throw new ApiError(400, '请选择有效的员工账号，不需要授权查看自己。');
+  const ids = [...new Set(input.subjectUserIds)];
+  const count = await db.prepare('SELECT COUNT(*) AS count FROM payroll_users WHERE id IN (SELECT value FROM json_each(?))').bind(JSON.stringify(ids)).first<{count: number}>();
+  if (count?.count !== ids.length) throw new ApiError(400, '部分员工账号不存在。');
+  const reviewerId = input.reviewerUserId === null || input.reviewerUserId === '' ? null : input.reviewerUserId;
+  if (reviewerId !== null && (typeof reviewerId !== 'string' || !target.work_manager ||
+    !await db.prepare("SELECT id FROM payroll_users WHERE id = ? AND status = 'active' AND role IN ('reviewer','admin')").bind(reviewerId).first())) throw new ApiError(400, '请为工作负责人选择启用的审核员或管理员。');
+  const before = await accountAccess(db, userId, toRole(target.role));
+  const features = { summary: input.features.summary, employees: input.features.employees, audit: input.features.audit };
+  const now = nextVersionTimestamp(target.updated_at);
+  const auditId = newId('audit');
+  const [mutation] = await db.batch([
+    db.prepare(`UPDATE payroll_users SET features_json = ?, reviewer_user_id = ?, updated_at = ?
+      WHERE id = ? AND updated_at = ? AND EXISTS (SELECT 1 FROM payroll_users actor WHERE actor.id = ? AND actor.role = 'admin' AND actor.status = 'active')
+      AND (? IS NULL OR EXISTS (SELECT 1 FROM payroll_users reviewer WHERE reviewer.id = ? AND reviewer.status = 'active' AND reviewer.role IN ('reviewer','admin')))`)
+      .bind(JSON.stringify(features), reviewerId, now, userId, target.updated_at, actor.userId, reviewerId, reviewerId),
+    db.prepare(`INSERT INTO payroll_audit_logs
+      (id, actor_user_id, action, target_type, target_id, detail_json, subject_user_id, business_month, created_at)
+      SELECT ?, ?, 'access.update', 'user', ?, ?, ?, NULL, ? WHERE changes() = 1`)
+      .bind(auditId, actor.userId, userId, JSON.stringify({before, after: {features, subjectUserIds: ids, reviewerUserId: reviewerId}}), userId, now),
+    db.prepare('DELETE FROM payroll_access_grants WHERE viewer_user_id = ? AND EXISTS (SELECT 1 FROM payroll_audit_logs WHERE id = ?)').bind(userId, auditId),
+    db.prepare(`INSERT INTO payroll_access_grants (viewer_user_id, subject_user_id, created_by, created_at)
+      SELECT ?, value, ?, ? FROM json_each(?) WHERE EXISTS (SELECT 1 FROM payroll_audit_logs WHERE id = ?)`).bind(userId, actor.userId, now, JSON.stringify(ids), auditId),
+  ]);
+  if (!mutation.meta.changes) throw new ApiError(409, '账号或权限已变化，请刷新后重试。');
+  const updated = (await getUserById(userId))!;
+  return { ...toManagedUser(updated), access: await accountAccess(db, userId, toRole(updated.role)) };
+}
+
+export async function getVisibleSalaryRecord(actor: SessionActor, id: string) {
+  const db = await database();
+  const row = await db.prepare(`SELECT r.* FROM payroll_salary_records r WHERE r.id = ? AND ${recordAccessSql(actor)}`).bind(id).first<RecordRow>();
+  if (!row) throw new ApiError(403, '没有查看该申报的权限。');
+  return (await withReviewerNames(db, [recordFromRow(row)]))[0];
+}
+export async function getRecordHistory(actor: SessionActor, id: string): Promise<RecordHistoryItem[]> {
+  const db = await database();
+  if (!await db.prepare(`SELECT r.id FROM payroll_salary_records r WHERE r.id = ? AND ${recordAccessSql(actor)}`).bind(id).first()) throw new ApiError(403, '没有查看该申报的权限。');
+  const rows = await db.prepare(`SELECT h.*, u.email, u.profile_json FROM payroll_record_history h
+    JOIN payroll_salary_records r ON r.id = h.record_id LEFT JOIN payroll_users u ON u.id = h.actor_user_id
+    WHERE h.record_id = ? AND ${recordAccessSql(actor)} AND (h.status != 1 OR r.user_id = ? OR ? = 'admin')
+    ORDER BY h.id DESC`).bind(id, actor.userId, actor.role).all<{
+      id: number; actor_user_id: string | null; action: string; created_at: string; data_json: string;
+      reviewer_user_id: string | null; profile_json: string | null; email: string | null;
+    }>();
+  const records = await withReviewerNames(db, rows.results.map(recordFromRow));
+  const snapshots: RecordHistoryItem[] = rows.results.map((row, index) => ({ id: row.id, actorName: row.email ? profileDisplayName(parseProfile(row.profile_json || '{}'), row.email) : '系统',
+    action: row.action, createdAt: row.created_at, record: records[index] }));
+  // Preserve pre-migration audit events without inventing historical wage snapshots.
+  const legacy = await db.prepare(`SELECT l.id, l.action, l.created_at, json_extract(l.detail_json, '$.auditMemo') AS audit_memo, u.email, u.profile_json
+    FROM payroll_audit_logs l JOIN payroll_salary_records r ON r.id = ?
+    LEFT JOIN payroll_users u ON u.id = l.actor_user_id
+    WHERE ${recordAccessSql(actor)} AND l.subject_user_id = r.user_id
+      AND ((l.target_type = 'salary_record' AND l.target_id = r.id) OR EXISTS (SELECT 1 FROM json_each(l.detail_json, '$.recordIds') WHERE value = r.id))
+      AND l.action LIKE 'salary.%'
+      AND (r.user_id = ? OR ? = 'admin' OR l.action IN ('salary.submit','salary.approve','salary.reject','salary.reassign','salary.proxy_submit','salary.proxy_batch_submit','salary.rule_generate'))
+      AND NOT EXISTS (SELECT 1 FROM payroll_record_history h WHERE h.record_id = r.id AND h.action = l.action AND h.created_at = l.created_at)
+    ORDER BY l.created_at DESC`).bind(id, actor.userId, actor.role).all<{
+      id: string; action: string; created_at: string; audit_memo: string | null; email: string | null; profile_json: string | null;
+    }>();
+  return [...snapshots, ...legacy.results.map((row): RecordHistoryItem => ({
+    id: 'legacy-' + row.id, actorName: row.email ? profileDisplayName(parseProfile(row.profile_json || '{}'), row.email) : '系统',
+    action: row.action, createdAt: row.created_at, record: null, auditMemo: row.audit_memo || undefined,
+  }))].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+}
+
+export async function reassignSalaryRecord(actor: SessionActor, id: string, reviewerUserId: string | null, expectedUpdatedAt: string) {
+  requireRole(actor, ['admin']);
+  const db = await database();
+  const row = await db.prepare('SELECT * FROM payroll_salary_records WHERE id = ?').bind(id).first<RecordRow>();
+  if (!row) throw new ApiError(404, '申报不存在。');
+  const record = recordFromRow(row);
+  if (record.status !== 2) throw new ApiError(409, '只能转交待审核申报。');
+  if (!expectedUpdatedAt || record.updatedAt !== expectedUpdatedAt) throw new ApiError(409, '申报已变化，请刷新。');
+  if (reviewerUserId !== null && (typeof reviewerUserId !== 'string' || !await db.prepare("SELECT id FROM payroll_users WHERE id = ? AND status = 'active' AND role IN ('reviewer','admin')").bind(reviewerUserId).first())) throw new ApiError(400, '审核员无效或已停用。');
+  const now = nextVersionTimestamp(record.updatedAt);
+  const auditId = newId('audit');
+  const [mutation] = await db.batch([
+    db.prepare(`UPDATE payroll_salary_records SET reviewer_user_id = ?, updated_at = ?, data_json = json_set(data_json, '$.updatedAt', ?)
+      WHERE id = ? AND status = 2 AND updated_at = ? AND EXISTS (SELECT 1 FROM payroll_users WHERE id = ? AND status = 'active' AND role = 'admin')
+      AND (? IS NULL OR EXISTS (SELECT 1 FROM payroll_users WHERE id = ? AND status = 'active' AND role IN ('reviewer','admin')))`)
+      .bind(reviewerUserId, now, now, id, record.updatedAt, actor.userId, reviewerUserId, reviewerUserId),
+    changedSalaryAuditStatement(db, auditId, actor.userId, 'salary.reassign', id, {subjectUserId: record.userId, businessMonth: record.workDate.slice(0,7), from: record.reviewerUserId, to: reviewerUserId}, now),
+    ...recordLifecycleStatements(db, [id], auditId),
+  ]);
+  if (!mutation.meta.changes) throw new ApiError(409, '申报或审核员已变化，请刷新。');
+  return getSalaryRecord(record.userId, id);
+}
+
+export async function reopenSalaryRecord(actor: SessionActor, id: string, expectedUpdatedAt: string) {
+  const db = await database();
+  const row = await db.prepare('SELECT * FROM payroll_salary_records WHERE id = ?').bind(id).first<RecordRow>();
+  if (!row) throw new ApiError(404, '申报不存在。');
+  const record = recordFromRow(row);
+  requirePayrollTarget(actor, record.userId);
+  if (![2,4].includes(record.status) || !expectedUpdatedAt || record.updatedAt !== expectedUpdatedAt) throw new ApiError(409, '只能撤回待审或修改已驳回记录，请刷新。');
+  const now = nextVersionTimestamp(record.updatedAt);
+  const auditId = newId('audit');
+  const [mutation] = await db.batch([
+    db.prepare(`UPDATE payroll_salary_records SET status = 1, reviewer_user_id = NULL, updated_at = ?,
+      data_json = json_set(data_json, '$.status', 1, '$.updatedAt', ?, '$.checkDate', NULL, '$.auditMemo', '')
+      WHERE id = ? AND status = ? AND updated_at = ? AND EXISTS (SELECT 1 FROM payroll_users a
+        WHERE a.id = ? AND a.status = 'active' AND (a.role = 'admin' OR a.id = payroll_salary_records.user_id))`)
+      .bind(now, now, id, record.status, expectedUpdatedAt, actor.userId),
+    changedSalaryAuditStatement(db, auditId, actor.userId, 'salary.reopen', id, {subjectUserId: record.userId, businessMonth: record.workDate.slice(0,7)}, now),
+    ...recordLifecycleStatements(db, [id], auditId),
+  ]);
+  if (!mutation.meta.changes) throw new ApiError(409, '申报已被处理或权限已变化，请刷新。');
+  return getSalaryRecord(record.userId, id);
 }
 
 export async function listManagedUsers(actor: SessionActor): Promise<ManagedUser[]> {
   requireRole(actor, ['admin']);
   const db = await database();
   const result = await db.prepare('SELECT * FROM payroll_users ORDER BY created_at ASC').all<UserRow>();
-  return result.results.map(toManagedUser);
+  const grants = await db.prepare('SELECT viewer_user_id, subject_user_id FROM payroll_access_grants ORDER BY subject_user_id')
+    .all<{viewer_user_id: string; subject_user_id: string}>();
+  const byViewer = new Map<string, string[]>();
+  for (const grant of grants.results) {
+    const ids = byViewer.get(grant.viewer_user_id) ?? [];
+    ids.push(grant.subject_user_id); byViewer.set(grant.viewer_user_id, ids);
+  }
+  return result.results.map((row) => ({...toManagedUser(row), access: {
+    features: featuresFromStored(toRole(row.role), row.features_json), subjectUserIds: byViewer.get(row.id) ?? [], reviewerUserId: row.reviewer_user_id ?? null,
+  }}));
 }
 
 export async function updateManagedUser(
@@ -1330,7 +1505,7 @@ export async function updateManagedUser(
   }
   const updated = await db.prepare('SELECT * FROM payroll_users WHERE id = ?').bind(targetUserId).first<UserRow>();
   if (!updated) throw new ApiError(404, '未找到用户。');
-  return toManagedUser(updated);
+  return { ...toManagedUser(updated), access: await accountAccess(db, updated.id, toRole(updated.role)) };
 }
 
 export async function adminResetPassword(
@@ -1457,81 +1632,82 @@ export async function deactivateDepartment(actor: SessionActor, id: string) {
 }
 
 export async function listRecentAuditLogs(actor: SessionActor, limit = 10): Promise<AuditLogItem[]> {
-  requireRole(actor, ['reviewer', 'admin']);
-  return queryAuditLogs(await database(), Math.min(Math.max(Math.floor(limit) || 10, 1), 10));
+  return queryAuditLogs(await database(), Math.min(Math.max(Math.floor(limit) || 10, 1), 10), actor);
 }
 
 export async function listStaffEmployees(actor: SessionActor): Promise<EmployeeSummary[]> {
-  requireRole(actor, ['reviewer', 'admin']);
-  return listStaffEmployeesInternal(await database());
+  const db = await database();
+  await requireFeature(db, actor, 'employees');
+  return listStaffEmployeesInternal(db, actor, true);
 }
 
 export async function getStaffEmployeeDetail(actor: SessionActor, targetUserId: string): Promise<EmployeeDetail> {
-  requireRole(actor, ['reviewer', 'admin']);
   const db = await database();
+  await requireFeature(db, actor, 'employees');
+  await requireFullAccess(db, actor, targetUserId);
   const userRow = await db.prepare('SELECT * FROM payroll_users WHERE id = ?').bind(targetUserId).first<UserRow>();
   if (!userRow) throw new ApiError(404, '未找到员工账号。');
-  const salaryRecords = await listSalaryRecords(targetUserId);
+  const salaryRecords = (await listSalaryRecords(targetUserId)).filter((r) => actor.role === 'admin' || actor.userId === targetUserId || r.status !== 1);
   const filesResult = await db.prepare(`SELECT f.key, f.user_id, f.original_name, f.content_type, f.size, f.created_at,
     GROUP_CONCAT(DISTINCT r.reference_type) AS reference_types
     FROM payroll_files f LEFT JOIN payroll_file_references r ON r.file_key = f.key
-    WHERE f.user_id = ? GROUP BY f.key ORDER BY f.created_at DESC`).bind(targetUserId).all<StaffFileRow>();
+    WHERE f.user_id = ? AND ${fileAccessSql(actor)} GROUP BY f.key ORDER BY f.created_at DESC`).bind(targetUserId).all<StaffFileRow>();
   return {
     user: toManagedUser(userRow),
     profile: parseProfile(userRow.profile_json),
     files: filesResult.results.map(toStoredFileInfo),
     salaryRecords,
     monthlySummaries: monthlySummaries(salaryRecords),
-    auditLogs: await queryAccountAuditLogs(db, targetUserId),
+    auditLogs: await queryAccountAuditLogs(db, targetUserId, undefined, actor),
   };
 }
 
-export async function getStaffTransferSheet(actor: SessionActor, requestedMonth?: string): Promise<TransferSheetRow[]> {
-  requireRole(actor, ['reviewer', 'admin']);
-  const month = requestedMonth || currentMonth();
-  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new ApiError(400, '查看月份格式无效。');
+export async function getStaffTransferSheet(actor: SessionActor, requestedMonth?: string, scope = 'all'): Promise<TransferSheetRow[]> {
+  const month = requireMonth(requestedMonth || currentMonth());
+  if (!['all','assigned','granted'].includes(scope)) throw new ApiError(400, '查看范围无效。');
   const db = await database();
-  const [usersResult, recordsResult, filesResult] = await Promise.all([
-    db.prepare('SELECT * FROM payroll_users ORDER BY created_at ASC').all<UserRow>(),
-    db.prepare(`SELECT id, user_id, status, currency, data_json FROM payroll_salary_records
-      WHERE status = 3 AND work_date LIKE ? ORDER BY work_date DESC, created_at DESC`)
-      .bind(`${month}-%`).all<RecordRow>(),
-    db.prepare(`SELECT f.key, f.user_id, f.original_name, f.content_type, f.size, f.created_at,
-      GROUP_CONCAT(DISTINCT r.reference_type) AS reference_types
-      FROM payroll_files f LEFT JOIN payroll_file_references r ON r.file_key = f.key
-      WHERE f.content_type = 'application/pdf'
-      GROUP BY f.key ORDER BY f.created_at DESC`).all<StaffFileRow>(),
-  ]);
-  const recordsByUser = new Map<string, SalaryRecord[]>();
-  for (const row of recordsResult.results) {
-    recordsByUser.set(row.user_id, [...(recordsByUser.get(row.user_id) ?? []), recordFromRow(row)]);
+  await requireFeature(db, actor, 'summary');
+  const filter = scope === 'assigned' ? `r.reviewer_user_id = ${sqlText(actor.userId)}` : scope === 'granted'
+    ? fullAccessSql(actor, 'r.user_id') : recordAccessSql(actor);
+  const result = await db.prepare(`SELECT r.* FROM payroll_salary_records r
+    WHERE r.status != 1 AND r.work_date LIKE ? AND ${recordAccessSql(actor)} AND ${filter}
+    ORDER BY r.work_date DESC, r.created_at DESC`).bind(month + '-%').all<RecordRow>();
+  const users = await db.prepare(`SELECT u.*, ${fullAccessSql(actor, 'u.id')} AS complete_profile FROM payroll_users u WHERE
+    ${fullAccessSql(actor, 'u.id')} OR EXISTS (SELECT 1 FROM payroll_salary_records r
+      WHERE r.user_id = u.id AND r.status != 1 AND r.work_date LIKE ? AND ${recordAccessSql(actor)} AND ${filter})
+    ORDER BY u.created_at ASC`).bind(month + '-%').all<UserRow & {complete_profile: number}>();
+  const fullIds = users.results.filter((user) => user.complete_profile).map((user) => user.id);
+  const files = await db.prepare(`SELECT *, '' AS reference_types FROM payroll_files f
+    WHERE user_id IN (SELECT value FROM json_each(?)) AND content_type = 'application/pdf' AND ${fileAccessSql(actor)}`)
+    .bind(JSON.stringify(fullIds)).all<StaffFileRow>();
+  const rows: TransferSheetRow[] = [];
+  for (const user of users.results) {
+    const records = result.results.filter((r) => r.user_id === user.id).map(recordFromRow);
+    const completeProfile = Boolean(user.complete_profile);
+    if (!records.length && (scope === 'assigned' || !completeProfile)) continue;
+    rows.push({ user: completeProfile ? toManagedUser(user) : { ...toManagedUser(user), email: '', lastLoginAt: null, profileReady: false, createdAt: '', updatedAt: '' },
+      profile: completeProfile ? parseProfile(user.profile_json) : createEmptyProfile(),
+      records, completeProfile, approvedAmounts: sumByCurrency(records.filter((r) => r.status === 3)),
+      pdfFiles: completeProfile ? files.results.filter((file) => file.user_id === user.id).map(toStoredFileInfo) : [] });
   }
-  const filesByUser = new Map<string, StoredFileInfo[]>();
-  for (const row of filesResult.results) {
-    filesByUser.set(row.user_id, [...(filesByUser.get(row.user_id) ?? []), toStoredFileInfo(row)]);
-  }
-  return usersResult.results.map((row) => ({
-    user: toManagedUser(row),
-    profile: parseProfile(row.profile_json),
-    approvedAmounts: sumByCurrency(recordsByUser.get(row.id) ?? []),
-    pdfFiles: filesByUser.get(row.id) ?? [],
-  }));
+  return rows;
 }
 
 export async function getAuditOverview(
   actor: SessionActor,
   input: { year?: string; month?: string; userId?: string },
 ): Promise<AuditOverview> {
-  requireRole(actor, ['reviewer', 'admin']);
-  const now = new Date();
-  const year = /^\d{4}$/.test(input.year ?? '') ? input.year! : String(now.getFullYear());
-  const fallbackMonth = `${year}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+  const naturalMonth = currentMonth();
+  const year = /^\d{4}$/.test(input.year ?? '') ? input.year! : naturalMonth.slice(0, 4);
+  const fallbackMonth = `${year}-${naturalMonth.slice(5, 7)}`;
   const month = new RegExp(`^${year}-(0[1-9]|1[0-2])$`).test(input.month ?? '') ? input.month! : fallbackMonth;
   const db = await database();
-  const result = await db.prepare(`SELECT id, user_id, status, currency, data_json
-    FROM payroll_salary_records WHERE status IN (2, 3, 4) AND work_date LIKE ?
+  await requireFeature(db, actor, 'audit');
+  const result = await db.prepare(`SELECT id, user_id, status, currency, reviewer_user_id, data_json
+    FROM payroll_salary_records r WHERE status IN (2, 3, 4) AND work_date LIKE ? AND ${recordAccessSql(actor)}
     ORDER BY work_date DESC, updated_at DESC`).bind(`${year}-%`).all<RecordRow>();
-  const employees = await listStaffEmployeesInternal(db);
+  const employees = await listStaffEmployeesInternal(db, actor);
   if (input.userId && !employees.some((employee) => employee.id === input.userId)) {
     throw new ApiError(404, '未找到要追踪的账号。');
   }
@@ -1560,9 +1736,9 @@ export async function getAuditOverview(
       submittedAmounts: sumByCurrency(departmentRecords),
       approvedAmounts: sumByCurrency(departmentRecords.filter((record) => record.status === 3)),
     })).sort((left, right) => right.recordCount - left.recordCount),
-    recentLogs: await queryAuditLogs(db, 10),
+    recentLogs: await queryAuditLogs(db, 10, actor),
     employees,
-    accountLogs: input.userId ? await queryAccountAuditLogs(db, input.userId, month) : [],
+    accountLogs: input.userId ? await queryAccountAuditLogs(db, input.userId, month, actor) : [],
   };
 }
 
@@ -1579,7 +1755,7 @@ export async function uploadFile(request: Request) {
 
 export async function uploadFileForUser(request: Request, targetUserId: string) {
   const actor = await requireSession(request);
-  requireRole(actor, ['reviewer', 'admin']);
+  requireRole(actor, ['admin']);
   const db = await database();
   await requireTargetUser(db, targetUserId, true);
   return storeUploadedFile(request, actor, targetUserId);
@@ -1618,7 +1794,7 @@ async function storeUploadedFile(request: Request, actor: SessionActor, ownerUse
           AND EXISTS (SELECT 1 FROM payroll_users WHERE id = ? AND status = 'active')
           AND EXISTS (SELECT 1 FROM payroll_users actor
             WHERE actor.id = ? AND actor.status = 'active'
-              AND (actor.id = ? OR actor.role IN ('reviewer', 'admin')))
+              AND (actor.id = ? OR actor.role = 'admin'))
           AND (
             NOT EXISTS (SELECT 1 FROM payroll_settings WHERE key = 'gray_clear_plan_v1')
             OR COALESCE((SELECT value FROM payroll_settings WHERE key = 'gray_maintenance_retired'), '0') = '1'
@@ -1663,7 +1839,7 @@ async function storeUploadedFile(request: Request, actor: SessionActor, ownerUse
     const uploadStillAuthorized = await db.prepare(`SELECT owner.id
       FROM payroll_users owner JOIN payroll_users actor ON actor.id = ?
       WHERE owner.id = ? AND owner.status = 'active' AND actor.status = 'active'
-        AND (actor.id = owner.id OR actor.role IN ('reviewer', 'admin'))`)
+        AND (actor.id = owner.id OR actor.role = 'admin')`)
       .bind(actor.userId, ownerUserId)
       .first<{ id: string }>();
     if (!uploadStillAuthorized) throw new ApiError(409, '账号或权限状态已发生变化，请重新登录。');
@@ -1726,6 +1902,7 @@ export async function deleteFile(request: Request, key: string) {
       db.prepare(`DELETE FROM payroll_files
         WHERE key = ? AND user_id = ?
           AND NOT EXISTS (SELECT 1 FROM payroll_file_references WHERE file_key = ?)
+          AND NOT EXISTS (SELECT 1 FROM payroll_record_history h, json_each(h.data_json, '$.attachments') attachment WHERE attachment.value = ${sqlText(key)})
           AND EXISTS (SELECT 1 FROM payroll_users actor
             WHERE actor.id = ? AND actor.status = 'active'
               AND (actor.id = ? OR actor.role = 'admin'))`)
@@ -1739,7 +1916,7 @@ export async function deleteFile(request: Request, key: string) {
       const reference = await db.prepare('SELECT reference_id FROM payroll_file_references WHERE file_key = ? LIMIT 1')
         .bind(key)
         .first<{ reference_id: string }>();
-      if (reference) throw new ApiError(409, '附件仍被资料或工资记录引用，不能删除。');
+      if (reference || await db.prepare("SELECT h.id FROM payroll_record_history h, json_each(h.data_json, '$.attachments') a WHERE a.value = ? LIMIT 1").bind(key).first()) throw new ApiError(409, '附件仍被资料、工资或审批历史引用，不能删除。');
       throw new ApiError(409, '附件状态已发生变化，请重试。');
     }
   } else {
@@ -1999,10 +2176,23 @@ async function sanitizeSalaryRecord(
   return record;
 }
 
-function recordFromRow(row: Pick<RecordRow, 'data_json' | 'currency'>) {
+async function withReviewerNames(db: D1Database, records: SalaryRecord[]) {
+  const ids = [...new Set(records.map((record) => record.reviewerUserId).filter(Boolean))];
+  if (!ids.length) return records;
+  const users = await db.prepare("SELECT id, email, profile_json, role, status FROM payroll_users WHERE id IN (SELECT value FROM json_each(?))")
+    .bind(JSON.stringify(ids)).all<Pick<UserRow, 'id' | 'email' | 'profile_json' | 'role' | 'status'>>();
+  const byId = new Map(users.results.map((user) => [user.id, user]));
+  return records.map((record) => {
+    const user = record.reviewerUserId ? byId.get(record.reviewerUserId) : null;
+    return {...record, reviewerName: user ? profileDisplayName(parseProfile(user.profile_json), user.email) : undefined,
+      reviewerAvailable: Boolean(user && user.status === 'active' && ['reviewer','admin'].includes(user.role))};
+  });
+}
+
+function recordFromRow(row: Pick<RecordRow, 'data_json' | 'currency' | 'reviewer_user_id'>) {
   const record = parseRecord(row.data_json, row.currency);
   if (!record) throw new ApiError(500, '工资记录格式错误。');
-  return record;
+  return { ...record, reviewerUserId: row.reviewer_user_id ?? null };
 }
 
 function parseRecord(value: string, rowCurrency?: string) {
@@ -2044,8 +2234,7 @@ async function assertOwnedFiles(db: D1Database, userId: string, keys: string[]) 
 }
 
 async function canReadFile(db: D1Database, actor: SessionActor, file: FileRow) {
-  void db;
-  return actor.userId === file.user_id || actor.role === 'admin' || actor.role === 'reviewer';
+  return Boolean(await db.prepare(`SELECT f.key FROM payroll_files f WHERE f.key = ? AND ${fileAccessSql(actor)}`).bind(file.key).first());
 }
 
 function conditionalSalaryFileReferenceStatements(
@@ -2098,14 +2287,17 @@ function guardedSalaryDeleteStatements(
   return [
     db.prepare(`DELETE FROM payroll_salary_records
       WHERE id = ? AND user_id = ? AND status = 1 AND updated_at = ?
+        AND NOT EXISTS (SELECT 1 FROM payroll_record_history h WHERE h.record_id = payroll_salary_records.id AND h.status != 1)
         AND EXISTS (SELECT 1 FROM payroll_users actor
           WHERE actor.id = ? AND actor.status = 'active'
-            AND (? = 'salary.delete' OR actor.role IN ('reviewer', 'admin')))`)
+            AND (? = 'salary.delete' OR actor.role = 'admin'))`)
       .bind(record.id, ownerUserId, record.updatedAt, actorUserId, action),
     db.prepare(`INSERT INTO payroll_audit_logs
       (id, actor_user_id, action, target_type, target_id, detail_json, subject_user_id, business_month, created_at)
       SELECT ?, ?, ?, 'salary_record', ?, ?, ?, ?, ? WHERE changes() = 1`)
       .bind(auditId, actorUserId, action, record.id, JSON.stringify(detail), subjectUserId, businessMonth, now),
+    db.prepare(`DELETE FROM payroll_record_history WHERE record_id = ? AND EXISTS (SELECT 1 FROM payroll_audit_logs WHERE id = ?)`)
+      .bind(record.id, auditId),
     db.prepare(`DELETE FROM payroll_file_references
       WHERE reference_type = 'salary' AND reference_id = ?
         AND EXISTS (SELECT 1 FROM payroll_audit_logs WHERE id = ?)`)
@@ -2138,6 +2330,7 @@ function auditStatement(
   targetId: string,
   detail: Record<string, unknown> = {},
   createdAt = new Date().toISOString(),
+  auditId = newId('audit'),
 ) {
   const { subjectUserId, businessMonth } = auditDimensions(targetType, targetId, detail);
   return db.prepare(`INSERT INTO payroll_audit_logs
@@ -2147,7 +2340,7 @@ function auditStatement(
       AND (? IS NULL OR EXISTS (SELECT 1 FROM payroll_users WHERE id = ?))
       AND (? <> 'salary_batch' OR EXISTS (SELECT 1 FROM payroll_salary_batches WHERE id = ?))
       AND (? <> 'recurring_rule' OR EXISTS (SELECT 1 FROM payroll_recurring_rules WHERE id = ?))`)
-    .bind(newId('audit'), actorUserId, action, targetType, targetId, JSON.stringify(detail),
+    .bind(auditId, actorUserId, action, targetType, targetId, JSON.stringify(detail),
       subjectUserId, businessMonth, createdAt,
       actorUserId, actorUserId, subjectUserId, subjectUserId,
       targetType, targetId, targetType, targetId);
@@ -2187,25 +2380,34 @@ function auditDimensions(targetType: string, targetId: string, detail: Record<st
   return { subjectUserId, businessMonth };
 }
 
-async function queryAuditLogs(db: D1Database, limit: number) {
+function auditAccessSql(actor: SessionActor) {
+  if (actor.role === 'admin') return '1';
+  return `((l.target_type = 'salary_record' AND EXISTS (SELECT 1 FROM payroll_salary_records r
+      WHERE r.id = l.target_id AND r.status != 1 AND ${recordAccessSql(actor)}))
+    OR (l.action != 'access.update' AND l.target_type != 'salary_record' AND ${fullAccessSql(actor, 'l.subject_user_id')}))`;
+}
+
+async function queryAuditLogs(db: D1Database, limit: number, actor?: SessionActor) {
   const result = await db.prepare(`SELECT l.id, l.actor_user_id, u.email AS actor_email, u.profile_json AS actor_profile_json,
     l.action, l.target_type, l.target_id, l.detail_json, l.business_month, l.created_at
     FROM payroll_audit_logs l
     LEFT JOIN payroll_users u ON u.id = l.actor_user_id
+    WHERE ${actor ? auditAccessSql(actor) : '1'}
     ORDER BY l.created_at DESC LIMIT ?`).bind(limit).all<AuditRow>();
   return result.results.map(toAuditLogItem);
 }
 
-async function queryAccountAuditLogs(db: D1Database, userId: string, month?: string) {
+async function queryAccountAuditLogs(db: D1Database, userId: string, month?: string, actor?: SessionActor) {
   const query = accountAuditQuery(userId, month);
+  if (actor) query.sql = query.sql.replace('ORDER BY', `AND ${auditAccessSql(actor)} ORDER BY`);
   const result = await db.prepare(query.sql).bind(...query.params).all<AuditRow>();
   return result.results.map(toAuditLogItem);
 }
 
-async function listStaffEmployeesInternal(db: D1Database): Promise<EmployeeSummary[]> {
+async function listStaffEmployeesInternal(db: D1Database, actor: SessionActor, fullOnly = false): Promise<EmployeeSummary[]> {
   const [usersResult, recordsResult] = await Promise.all([
-    db.prepare('SELECT * FROM payroll_users ORDER BY created_at ASC').all<UserRow>(),
-    db.prepare(`SELECT id, user_id, status, currency, data_json FROM payroll_salary_records
+    db.prepare(`SELECT * FROM payroll_users u WHERE ${fullAccessSql(actor, 'u.id')} ${fullOnly ? '' : 'OR EXISTS (SELECT 1 FROM payroll_salary_records r WHERE r.user_id = u.id AND r.status != 1 AND ' + recordAccessSql(actor) + ')'} ORDER BY created_at ASC`).all<UserRow>(),
+    db.prepare(`SELECT id, user_id, status, currency, reviewer_user_id, data_json FROM payroll_salary_records r WHERE ${recordAccessSql(actor)}
       ORDER BY work_date DESC, created_at DESC`).all<RecordRow>(),
   ]);
   const recordsByUser = new Map<string, SalaryRecord[]>();
@@ -2331,7 +2533,7 @@ async function actorDisplayName(db: D1Database, actor: SessionActor) {
 }
 
 async function salaryRecordForOwner(db: D1Database, userId: string, id: string) {
-  const row = await db.prepare(`SELECT id, user_id, status, currency, data_json
+  const row = await db.prepare(`SELECT id, user_id, status, currency, reviewer_user_id, data_json
     FROM payroll_salary_records WHERE id = ? AND user_id = ?`).bind(id, userId).first<RecordRow>();
   if (!row) throw new ApiError(404, '未找到工资记录。');
   return recordFromRow(row);
@@ -2360,7 +2562,7 @@ async function replaySalaryBatch(
   }
   const ids = parseStringArray(row.record_ids_json);
   if (ids.length === 0) return [];
-  const result = await db.prepare(`SELECT records.id, records.user_id, records.status, records.currency, records.data_json
+  const result = await db.prepare(`SELECT records.id, records.user_id, records.status, records.currency, records.reviewer_user_id, records.data_json
     FROM payroll_salary_records records
     JOIN json_each(?) requested ON records.id = CAST(requested.value AS TEXT)
     WHERE records.user_id = ?`)
@@ -2394,7 +2596,7 @@ function salaryRecordsInsertStatement(
       AND instance.record_ids_json = ? AND instance.created_at = ?
   )` : '';
   const actorGuard = actorUserId
-    ? "AND EXISTS (SELECT 1 FROM payroll_users actor WHERE actor.id = ? AND actor.status = 'active' AND actor.role IN ('reviewer', 'admin'))"
+    ? "AND EXISTS (SELECT 1 FROM payroll_users actor WHERE actor.id = ? AND actor.status = 'active' AND (actor.role = 'admin' OR actor.id = json_extract(value, '$.userId')))"
     : '';
   const statement = db.prepare(`INSERT INTO payroll_salary_records
     (id, user_id, status, work_date, final_salary, currency, data_json, created_at, updated_at)
@@ -2533,6 +2735,7 @@ function toRecurringPayrollRule(row: RecurringRuleRow): RecurringPayrollRule {
     userEmail: row.user_email,
     title: row.title,
     active: Boolean(row.active),
+    executionBlocked: !Boolean(row.execution_allowed),
     submit: Boolean(row.submit_on_generate),
     startMonth: row.start_month,
     endMonth: row.end_month,
@@ -2556,7 +2759,9 @@ async function recurringRuleRow(db: D1Database, id: string) {
 
 async function recurringRuleRowOrNull(db: D1Database, id: string) {
   return db.prepare(`SELECT r.*, u.email AS user_email, u.profile_json AS user_profile_json,
-    c.email AS creator_email, c.profile_json AS creator_profile_json
+    c.email AS creator_email, c.profile_json AS creator_profile_json,
+    EXISTS (SELECT 1 FROM payroll_users execution_actor WHERE execution_actor.id = COALESCE(r.execution_owner_user_id, r.created_by_user_id)
+      AND execution_actor.status = 'active' AND (execution_actor.role = 'admin' OR execution_actor.id = r.user_id)) AS execution_allowed
     FROM payroll_recurring_rules r JOIN payroll_users u ON u.id = r.user_id
     LEFT JOIN payroll_users c ON c.id = r.created_by_user_id
     WHERE r.id = ? AND r.deleted_at IS NULL`).bind(id).first<RecurringRuleRow>();
@@ -2565,17 +2770,6 @@ async function recurringRuleRowOrNull(db: D1Database, id: string) {
 async function optionalRecurringPayrollRule(db: D1Database, id: string) {
   const row = await recurringRuleRowOrNull(db, id);
   return row ? toRecurringPayrollRule(row) : null;
-}
-
-function tokyoMonth() {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Tokyo',
-    year: 'numeric',
-    month: '2-digit',
-  }).formatToParts(new Date());
-  const year = parts.find((part) => part.type === 'year')?.value;
-  const month = parts.find((part) => part.type === 'month')?.value;
-  return requireMonth(`${year}-${month}`);
 }
 
 function parseStringArray(value: string) {

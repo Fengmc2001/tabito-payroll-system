@@ -74,11 +74,14 @@ expectStatus(adminUsers, 200, 'administrator can list delegated-payroll targets'
 assert(adminUsers.data.users.some((user) => user.id === targetA.id && user.profileReady), 'administrator sees a payroll-ready target');
 const reviewerUsers = await request('/api/staff/payroll/users', { cookie: reviewerSession.cookie });
 expectStatus(reviewerUsers, 200, 'reviewer can list delegated-payroll targets');
-assert(reviewerUsers.data.users.some((user) => user.id === targetB.id), 'reviewer sees the second payroll target');
+assert(reviewerUsers.data.users.length === 1 && reviewerUsers.data.users[0].id === reviewer.id, 'reviewer can only choose self for batch filing');
 await expect('/api/admin/users', 403, 'reviewer still cannot use administrator-only account APIs', {
   cookie: reviewerSession.cookie,
 });
 
+// The remaining proxy workflow requires administrator authority; reviewer isolation is tested above and in permissions-self-check.
+const proxyOperatorPromotion = await patchManagedUser(reviewer.id, adminCookie, {role:'admin'});
+expectStatus(proxyOperatorPromotion, 200, 'second test operator is explicitly promoted to admin before proxy workflows');
 const ownEmployeeRecord = makeSalaryRecord({
   userId: employee.id,
   managerId: admin.id,
@@ -596,9 +599,8 @@ async function assertEmployeeForbiddenMatrix({ employeeCookie, target, record, b
     rate: 1000,
     workContent: '越权测试',
   });
-  await expect('/api/staff/payroll/users', 403, 'ordinary employee cannot list delegated-payroll targets', {
-    cookie: employeeCookie,
-  });
+  const ownTargets = await expect('/api/staff/payroll/users', 200, 'ordinary employee can list self for batch filing', {cookie:employeeCookie});
+  assert(ownTargets.data.users.length === 1 && ownTargets.data.users[0].id === employee.id, 'ordinary employee sees no other filing targets');
   await expect(`/api/staff/payroll/records?userId=${target.id}&month=${singleMonth}`, 403, 'ordinary employee cannot read another account delegated records', {
     cookie: employeeCookie,
   });
@@ -636,7 +638,7 @@ async function assertEmployeeForbiddenMatrix({ employeeCookie, target, record, b
   await expect('/api/staff/payroll/rules/run', 403, 'ordinary employee cannot manually run recurring rules', {
     method: 'POST',
     cookie: employeeCookie,
-    body: { month: recurringNextMonth },
+    body: { month: recurringNextMonth, targetUserId: target.id },
   });
   await expect(`/api/staff/payroll/uploads/${target.id}`, 403, 'ordinary employee cannot upload a file for another account', {
     method: 'POST',
@@ -827,9 +829,14 @@ function assert(condition, message) {
 }
 
 async function request(path, options = {}) {
+  if (options.method === 'PATCH' && /^\/api\/review\/salary-records\/[^/]+$/.test(path) && options.body?.decision && !Object.hasOwn(options.body, 'expectedUpdatedAt')) {
+    const snapshot = await request('/api/salary-records/' + path.split('/').pop() + '/history', {cookie: options.cookie});
+    if (snapshot.status === 200) options = {...options, body: {...options.body, expectedUpdatedAt: snapshot.data.record.updatedAt}};
+  }
   // Sequential fixture saves use a fresh version; concurrency cases pass an explicit snapshot.
   if (options.method === 'PATCH' && options.body?.profile && !Object.hasOwn(options.body, 'expectedProfileVersion')) {
     const snapshot = await request(path, { cookie: options.cookie });
+    if (snapshot.status >= 500) throw new Error('Profile snapshot request failed: ' + snapshot.status + ' ' + JSON.stringify(snapshot.data));
     options = { ...options, body: { ...options.body, expectedProfileVersion: snapshot.data.account?.profileVersion } };
   }
   const headers = new Headers();

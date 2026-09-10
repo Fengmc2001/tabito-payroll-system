@@ -3,6 +3,7 @@ import { DEFAULT_DEPARTMENTS } from '../app/lib/payroll.ts';
 export const RESET_KEY = 'production_reset_20260906_v1';
 export const LOCK_KEY = RESET_KEY + '_owner';
 export const RESET_TABLES = [
+  'payroll_access_grants', 'payroll_record_history',
   'payroll_seed_entities', 'payroll_recurring_instances', 'payroll_recurring_rules',
   'payroll_salary_batches', 'payroll_file_references', 'payroll_salary_records',
   'payroll_files', 'payroll_audit_logs', 'payroll_sessions', 'payroll_departments', 'payroll_users',

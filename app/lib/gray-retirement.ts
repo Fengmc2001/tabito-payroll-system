@@ -3,7 +3,7 @@
 export function grayRetirementPlan(now: string, clearPlan: string, departments: ReadonlyArray<{ key: string; label: string }>) {
   const guard = `NOT EXISTS (SELECT 1 FROM payroll_settings WHERE key = 'gray_maintenance_retired' AND value = '1')
     AND EXISTS (SELECT 1 FROM payroll_settings WHERE key = 'gray_clear_plan_v1' AND value = ?)`;
-  const tables = ['payroll_seed_entities', 'payroll_recurring_instances', 'payroll_recurring_rules',
+  const tables = ['payroll_access_grants', 'payroll_record_history', 'payroll_seed_entities', 'payroll_recurring_instances', 'payroll_recurring_rules',
     'payroll_salary_batches', 'payroll_file_references', 'payroll_salary_records', 'payroll_files',
     'payroll_audit_logs', 'payroll_sessions', 'payroll_departments', 'payroll_users'];
   return [

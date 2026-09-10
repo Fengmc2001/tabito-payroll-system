@@ -78,15 +78,16 @@ const logInsert = db.prepare(`INSERT INTO payroll_audit_logs
   (id, actor_user_id, action, target_type, target_id, detail_json, subject_user_id, business_month, created_at)
   VALUES (?, ?, 'salary.review', 'salary_record', 'missing-record', ?, ?, ?, ?)`);
 logInsert.run('mentioned-only', 'other-user', JSON.stringify({ memo: 'formal-admin' }), 'other-user', '2026-09', now);
-logInsert.run('boundary', 'formal-admin', '{}', null, null, '2026-08-31T16:30:00Z');
+logInsert.run('boundary', 'formal-admin', '{}', null, null, '2026-08-31T15:00:00Z');
+logInsert.run('before-boundary', 'formal-admin', '{}', null, null, '2026-08-31T14:59:59Z');
 logInsert.run('explicit-business', 'formal-admin', '{}', null, '2026-08', '2026-09-01T00:00:00Z');
 logInsert.run('structured-legacy', 'other-user', JSON.stringify({ ownerUserId: 'formal-admin' }), null, null, now);
 const september = accountAuditQuery('formal-admin', '2026-09');
 const septemberRows = db.prepare(september.sql).all(...september.params);
 equal(septemberRows.map((row) => row.id).sort(), ['boundary', 'structured-legacy'], 'precise membership and Japan fallback month');
 const august = accountAuditQuery('formal-admin', '2026-08');
-equal(db.prepare(august.sql).all(...august.params).map((row) => row.id), ['explicit-business'], 'business month overrides event month');
-equal(new Date('2026-08-31T16:30:00Z').toLocaleDateString('sv-SE', { timeZone: 'Asia/Tokyo' }), '2026-09-01', 'display date matches audit fallback month');
+equal(db.prepare(august.sql).all(...august.params).map((row) => row.id), ['explicit-business', 'before-boundary'], 'business month overrides event month; Japan midnight is the fallback boundary');
+equal(new Date('2026-08-31T15:00:00Z').toLocaleDateString('sv-SE', { timeZone: 'Asia/Tokyo' }), '2026-09-01', 'display date matches audit fallback month');
 
 // Execute the actual auditStatement implementation against the real SQLite schema.
 const serverSource = ts.createSourceFile('payroll-store.ts', readFileSync(new URL('../app/lib/server/payroll-store.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
@@ -129,6 +130,8 @@ db.prepare(`INSERT INTO payroll_salary_records (id,user_id,status,work_date,fina
 class LocalApiError extends Error { constructor(status, message) { super(message); this.status = status; } }
 const changedAudit = actualFunction('changedSalaryAuditStatement', { auditDimensions: dimensions });
 const conditionalReferences = actualFunction('conditionalSalaryFileReferenceStatements', {});
+const accessSource = ts.createSourceFile('access-control.ts', readFileSync(new URL('../app/lib/server/access-control.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
+const recordLifecycle = actualFunction('recordLifecycleStatements', {}, accessSource);
 const saveProxy = actualFunction('saveProxySalaryRecord', {
   requireRole() {}, ApiError: LocalApiError, database: async () => adapter,
   requireTargetUser: async () => ({ id: 'other-user', status: 'active' }),
@@ -142,6 +145,7 @@ const saveProxy = actualFunction('saveProxySalaryRecord', {
   newId: () => 'regression-audit-' + ++auditSequence,
   changedSalaryAuditStatement: changedAudit,
   conditionalSalaryFileReferenceStatements: conditionalReferences,
+  recordLifecycleStatements: recordLifecycle,
 });
 const countBeforeRace = db.prepare('SELECT count(*) AS n FROM payroll_audit_logs').get().n;
 await assert.rejects(() => saveProxy({ userId: 'formal-admin', role: 'admin' }, 'other-user', proxyExisting, true), (error) => error.status === 409);

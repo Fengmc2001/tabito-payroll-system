@@ -292,9 +292,9 @@ export function minimalPdf(label) {
   );
 }
 
-export function currentMonthShanghai() {
+export function currentMonthTokyo() {
   const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Shanghai',
+    timeZone: 'Asia/Tokyo',
     year: 'numeric',
     month: '2-digit',
   }).formatToParts(new Date());

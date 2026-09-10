@@ -6,6 +6,7 @@ export type AppRoute =
   | '/profile/first-setting'
   | '/profile/setting'
   | '/pay/salary'
+  | '/pay/salary/self-batch'
   | '/pay/salary/single'
   | '/pay/salary/batch'
   | '/pay/history'
@@ -18,6 +19,16 @@ export type AppRoute =
 export type SalaryApplyType = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 export type SalaryStatus = 1 | 2 | 3 | 4;
 export type AccountRole = 'employee' | 'reviewer' | 'admin';
+export type AccessFeatures = { summary: boolean; employees: boolean; audit: boolean };
+export type AccountAccess = { features: AccessFeatures; subjectUserIds: string[]; reviewerUserId: string | null };
+export const FEATURE_LABELS: Record<keyof AccessFeatures, string> = { summary: '工资汇总', employees: '员工管理（只读）', audit: '总审计（只读）' };
+export function defaultFeatures(role: AccountRole): AccessFeatures {
+  return { summary: role !== 'employee', employees: role === 'admin', audit: role === 'admin' };
+}
+export function accountFeatures(account: { role: AccountRole; access?: AccountAccess }): AccessFeatures {
+  return account.role === 'admin' ? defaultFeatures('admin') : account.access?.features ?? defaultFeatures(account.role);
+}
+export type RecordHistoryItem = { id: number | string; actorName: string; action: string; createdAt: string; record: SalaryRecord | null; auditMemo?: string };
 export type AccountStatus = 'active' | 'disabled';
 export type CurrencyCode = 'JPY' | 'CNY';
 export type CurrencyAmounts = Record<CurrencyCode, number>;
@@ -61,6 +72,9 @@ export type Profile = {
 };
 
 export type SalaryRecord = {
+  reviewerUserId?: string | null;
+  reviewerName?: string;
+  reviewerAvailable?: boolean;
   id: string;
   userId: string;
   workDate: string;
@@ -99,6 +113,7 @@ export type SalaryRecord = {
 };
 
 export type StoredAccount = {
+  access?: AccountAccess;
   id: string;
   profileVersion?: string;
   email: string;
@@ -112,6 +127,7 @@ export type StoredAccount = {
 };
 
 export type ManagedUser = {
+  access?: AccountAccess;
   id: string;
   email: string;
   displayName: string;
@@ -168,6 +184,7 @@ export type ProxyPayrollBatchInput = {
 };
 
 export type RecurringPayrollRule = {
+  executionBlocked?: boolean;
   id: string;
   userId: string;
   userDisplayName: string;
@@ -265,6 +282,9 @@ export type EmployeeDetail = {
 };
 
 export type TransferSheetRow = {
+  records?: SalaryRecord[];
+  completeProfile?: boolean;
+
   user: ManagedUser;
   profile: Profile;
   approvedAmounts: CurrencyAmounts;
@@ -409,9 +429,27 @@ export const createEmptyProfile = (): Profile => ({
   bankFileNames: [],
 });
 
+export const PAYROLL_TIME_ZONE = 'Asia/Tokyo';
+
+const japanDateFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: PAYROLL_TIME_ZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+export function dateInJapan(date: Date) {
+  const parts = japanDateFormatter.formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)!.value;
+  return `${part('year')}-${part('month')}-${part('day')}`;
+}
+
+export function formatJapanDateTime(value: string) {
+  return new Date(value).toLocaleString('zh-CN', { timeZone: PAYROLL_TIME_ZONE });
+}
+
 export function today() {
-  const date = new Date();
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  return dateInJapan(new Date());
 }
 
 export function currentMonth() {
@@ -621,8 +659,8 @@ export function profileIsReady(profile: Profile) {
 export function nextPaymentDate(workDate: string) {
   const safeDate = dateIsValid(workDate) ? workDate : today();
   const [year, month] = safeDate.split('-').map(Number);
-  const date = new Date(year, month, 10);
-  return date.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' });
+  const date = new Date(Date.UTC(year, month, 10));
+  return date.toLocaleDateString('zh-CN', { timeZone: PAYROLL_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' });
 }
 
 export function cloneAsDraft(record: SalaryRecord, userId: string) {

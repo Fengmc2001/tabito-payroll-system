@@ -37,13 +37,13 @@ check(
   '三种工资申报入口属于左侧工资申报子菜单',
 );
 check(
-  pageSource.includes("{ route: '/review/salary', label: '工资审批'")
-    && pageSource.includes("{ route: '/review/summary', label: '工资汇总'"),
+  pageSource.includes("{ route: '/review/salary' as const, label: '工资审批'")
+    && pageSource.includes("{ route: '/review/summary' as const, label: '工资汇总'"),
   '工资审批与工资汇总属于左侧工资审核子菜单',
 );
 check(
-  pageSource.includes("...(privileged ? [")
-    && pageSource.includes("(isDelegatedPayrollRoute(route) || isReviewRoute(route)) && activeAccount.role === 'employee'"),
+  pageSource.includes("...(account.role === 'admin' ? [")
+    && pageSource.includes("isDelegatedPayrollRoute(route) && activeAccount.role !== 'admin'"),
   '特权子菜单和新增深链都受角色权限限制',
 );
 check(
@@ -70,7 +70,7 @@ check(
 );
 check(
   reviewSource.includes("const [selectedUserId, setSelectedUserId] = useState('');")
-    && reviewSource.includes('<option value="">全部账号</option>'),
+    && reviewSource.includes("<option value=\"\">{administrator ? '全部账号' : '全部可审核账号'}</option>"),
   '工资审核默认显示全部账号并提供账号筛选器',
 );
 check(
@@ -106,7 +106,25 @@ check(
   '审核卡片突出金额并用紧凑主信息与可展开申报信息缩短高度',
 );
 
-assert.equal(checks.length, 18);
+check(
+  pageSource.includes("route: '/pay/salary/self-batch'") && payrollSource.includes('selfMode'),
+  '本人批量申报有独立入口且使用本人目标模式',
+);
+check(
+  transferSource.includes('const revision = requestRevision.current;') && transferSource.includes('if (requestRevision.current !== revision) return;')
+    && transferSource.includes('disabled={exporting}') && transferSource.includes('api/staff/transfer-sheet?month='),
+  '导出重新取数并防止切换月份或页面后使用旧响应',
+);
+check(
+  reviewSource.includes('RecordDetailsButton') && reviewSource.includes('ReviewAssignment')
+    && reviewSource.includes('expectedUpdatedAt: item.record.updatedAt'),
+  '审批记录支持详情、转交并携带记录版本',
+);
+check(
+  source.includes('rule.executionBlocked') && source.includes('接管并启用'),
+  '失去原代报权限的自动规律明确显示停用原因和接管动作',
+);
+assert.equal(checks.length, 22);
 process.stdout.write(`${JSON.stringify({ result: 'PASS', checks: checks.length }, null, 2)}\n`);
 
 function check(condition, message) {

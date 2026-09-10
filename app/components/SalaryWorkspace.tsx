@@ -1,5 +1,6 @@
 'use client';
 
+import { RecordDetailsButton } from './RecordDetailsButton';
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from 'react';
 import { FileNameInput, Field, FormSection, StatusMessage, invalidFormControlMessage } from './form-controls';
 import { useFeedback, useModalFocus, useUnsavedChanges, useUploadTracker } from './interaction-guards';
@@ -134,6 +135,15 @@ export function SalaryWorkspace({
     setNotice('已复制为一条新的未提交记录。');
   };
 
+  const reopen = async (record: SalaryRecord) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const result = await apiRequest<{record:SalaryRecord}>(`/api/salary-records/${record.id}/reopen`, {method:'POST',body:{expectedUpdatedAt:record.updatedAt}});
+      await onRefresh(); setEditing(result.record); setNoticeTone('success');setNotice('已退回未提交，可修改后重新申报。');
+    } catch(error) {setNoticeTone('error');setNotice(messageFrom(error));} finally {setBusy(false);}
+  };
+
   const apply = () => {
     if (drafts.length === 0) {
       setNoticeTone('info');
@@ -192,8 +202,8 @@ export function SalaryWorkspace({
       </section>
 
       <div className="salary-status-sections">
-        <SalaryStatusSection tone="pending" title="待审核" records={pending} onCopy={copy} />
-        <SalaryStatusSection tone="rejected" title="已驳回" records={rejected} onCopy={copy} />
+        <SalaryStatusSection tone="pending" title="待审核" records={pending} onCopy={copy} onReopen={reopen} />
+        <SalaryStatusSection tone="rejected" title="已驳回" records={rejected} onCopy={copy} onReopen={reopen} />
         <SalaryStatusSection tone="approved" title="已通过" records={approved} onCopy={copy} />
       </div>
 
@@ -295,6 +305,7 @@ export function SalaryTable({
   onEdit,
   onCopy,
   onDelete,
+  onReopen,
   readOnly = false,
   emptyMessage = '尚未创建工资记录。',
 }: {
@@ -302,6 +313,7 @@ export function SalaryTable({
   onEdit?: (record: SalaryRecord) => void;
   onCopy?: (record: SalaryRecord) => void;
   onDelete?: (id: string) => void;
+  onReopen?: (record: SalaryRecord) => void;
   readOnly?: boolean;
   emptyMessage?: string;
 }) {
@@ -309,7 +321,7 @@ export function SalaryTable({
     return <div className="empty-state empty-state--compact">{emptyMessage}</div>;
   }
 
-  const hasActions = !readOnly && Boolean(onEdit || onCopy || onDelete);
+  const hasActions = !readOnly && Boolean(onEdit || onCopy || onDelete || onReopen);
 
   return (
     <div className="data-table-wrap">
@@ -322,7 +334,7 @@ export function SalaryTable({
             <th>计费方式</th>
             <th>工作收入</th>
             <th>状态</th>
-            {hasActions && <th>操作</th>}
+            <th>详情</th>{hasActions && <th>操作</th>}
           </tr>
         </thead>
         <tbody>
@@ -339,9 +351,10 @@ export function SalaryTable({
                   <span className={`status-badge status-badge--${status.tone}`}>{status.label}</span>
                   {record.auditMemo && <small className="salary-audit-note">{record.auditMemo}</small>}
                 </td>
-                {hasActions && <td>
+                <td><RecordDetailsButton record={record} /></td>{hasActions && <td>
                   <div className="row-actions">
                     {record.status === 1 && onEdit && <button type="button" onClick={() => onEdit(record)}>编辑</button>}
+                    {onReopen && [2,4].includes(record.status) && <button type="button" onClick={() => onReopen(record)}>{record.status === 2 ? '撤回修改' : '修改重提'}</button>}
                     {onCopy && <button type="button" onClick={() => onCopy(record)}>复制</button>}
                     {record.status === 1 && onDelete && <button type="button" className="danger-text" onClick={() => onDelete(record.id)}>删除</button>}
                   </div>
@@ -360,11 +373,13 @@ export function SalaryStatusSection({
   title,
   records,
   onCopy,
+  onReopen,
 }: {
   tone: 'pending' | 'approved' | 'rejected';
   title: string;
   records: SalaryRecord[];
   onCopy: (record: SalaryRecord) => void;
+  onReopen?: (record: SalaryRecord) => void;
 }) {
   return (
     <section className={`salary-record-section salary-record-section--${tone}`}>
@@ -375,6 +390,7 @@ export function SalaryStatusSection({
       <SalaryTable
         records={records}
         onCopy={onCopy}
+        onReopen={onReopen}
         emptyMessage={`本月没有${title.replace(' · ', '')}记录。`}
       />
     </section>

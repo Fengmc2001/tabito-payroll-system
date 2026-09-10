@@ -8,7 +8,7 @@ import {
   assertGrayMaintenancePreflight,
   assertMonth,
   credentialPath,
-  currentMonthShanghai,
+  currentMonthTokyo,
   digest,
   grayAdminSalarySpec,
   grayBaseUrl,
@@ -20,7 +20,7 @@ import {
 } from './gray-fixture-common.mjs';
 
 const baseUrl = grayBaseUrl();
-const month = assertMonth(process.env.PAYROLL_GRAY_MONTH || currentMonthShanghai());
+const month = assertMonth(process.env.PAYROLL_GRAY_MONTH || currentMonthTokyo());
 const client = new PayrollClient(baseUrl);
 const seededFiles = new Set();
 const seededRecords = new Map();
@@ -106,7 +106,7 @@ for (const spec of credentials.accounts) {
     body: {
       role: spec.role,
       status: 'active',
-      workManager: spec.key === 'lingling',
+      workManager: ['lingling','aiwei'].includes(spec.key),
       expectedUpdatedAt: user.updatedAt,
     },
   });
@@ -120,6 +120,14 @@ for (const credentialsForUser of credentials.accounts) {
 adminSession = sessions.get('lingling');
 const adminUserId = adminSession.account.id;
 
+// Explicit demo routing: teaching goes to Aiwei, management and commission to Lingling.
+managed = (await client.expect('/api/admin/users', 200, {cookie:adminSession.cookie})).data.users;
+for (const key of ['lingling','aiwei']) {
+  const session = sessions.get(key);
+  const user = managed.find(candidate=>candidate.id===session.account.id);
+  await client.expect('/api/admin/users/'+user.id+'/access',200,{method:'PATCH',cookie:adminSession.cookie,
+    body:{...user.access,reviewerUserId:user.id,expectedUpdatedAt:user.updatedAt}});
+}
 const adminRecord = await ensureAdminCommission(adminSession);
 seededRecords.set(adminRecord.id, adminRecord);
 
@@ -411,11 +419,17 @@ async function setDecision(records, decision, cookie) {
     const expectedStatus = decision === 'approve' ? 3 : 4;
     if (source.status === expectedStatus) continue;
     assert(source.status === 2, `记录 ${source.id} 已处于不可变更的状态 ${source.status}。`);
+    let current = (await client.expect('/api/salary-records/'+source.id+'/history',200,{cookie:adminSession.cookie})).data.record;
+    if (cookie !== adminSession.cookie && current.reviewerUserId !== sessions.get('aiwei').account.id) {
+      current = (await client.expect('/api/review/salary-records/'+source.id+'/assign',200,{method:'PATCH',cookie:adminSession.cookie,
+        body:{reviewerUserId:sessions.get('aiwei').account.id,expectedUpdatedAt:current.updatedAt}})).data.record;
+    }
     const reviewed = await client.expect(`/api/review/salary-records/${source.id}`, 200, {
       method: 'PATCH',
       cookie,
       body: {
         decision,
+        expectedUpdatedAt: current.updatedAt,
         auditMemo: decision === 'reject' ? '灰度数据：故意驳回，用于验证完整状态流转。' : '灰度数据审核通过。',
       },
     });
@@ -430,8 +444,8 @@ function salaryTemplate(target, spec) {
     id: `salary-gray-v1-${spec.slug}-${month.replace('-', '')}`,
     userId: target.id,
     workDate: spec.date,
-    checkUserId: adminUserId,
-    checkUser: '泠泠',
+    checkUserId: (spec.slug.includes('teaching') || spec.slug.startsWith('teacher-')) && spec.slug !== 'teacher-d-cny' ? sessions.get('aiwei').account.id : adminUserId,
+    checkUser: (spec.slug.includes('teaching') || spec.slug.startsWith('teacher-')) && spec.slug !== 'teacher-d-cny' ? '阿惟' : '泠泠',
     departmentKey: spec.slug.includes('teaching') || spec.slug.startsWith('teacher-') ? 'dept-teaching' : 'dept-affairs',
     departmentLabel: spec.slug.includes('teaching') || spec.slug.startsWith('teacher-') ? '教学部' : '事务部',
     currency: spec.currency,

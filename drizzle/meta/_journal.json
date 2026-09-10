@@ -50,6 +50,20 @@
       "when": 1788434378599,
       "tag": "0006_dry_winter_soldier",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1788964580896,
+      "tag": "0007_sparkling_ares",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1788966978799,
+      "tag": "0008_empty_mach_iv",
+      "breakpoints": true
     }
   ]
 }

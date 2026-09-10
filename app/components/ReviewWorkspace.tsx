@@ -1,5 +1,7 @@
 'use client';
 
+import { RecordDetailsButton } from './RecordDetailsButton';
+import { ReviewAssignment } from './ReviewAssignment';
 import { appPath } from '../lib/app-path';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -22,10 +24,11 @@ import { StatusMessage } from './form-controls';
 
 type Filter = 'all' | 'pending' | 'approved' | 'rejected';
 
-export function ReviewWorkspace() {
+export function ReviewWorkspace({ administrator = false }: {administrator?: boolean}) {
   const [items, setItems] = useState<ReviewSalaryItem[]>([]);
   const [logs, setLogs] = useState<AuditLogItem[]>([]);
   const [filter, setFilter] = useState<Filter>('all');
+  const [needsAssignment, setNeedsAssignment] = useState(false);
   const [month, setMonth] = useState(currentMonth);
   const [selectedUserId, setSelectedUserId] = useState('');
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -52,6 +55,7 @@ export function ReviewWorkspace() {
       }
     } catch (error) {
       if (requestRevision.current === revision) {
+        setItems([]); setLogs([]);
         setTone('error');
         setMessage(errorText(error));
       }
@@ -74,6 +78,7 @@ export function ReviewWorkspace() {
       }
     }).catch((error) => {
       if (requestRevision.current === revision) {
+        setItems([]); setLogs([]);
         setTone('error');
         setMessage(errorText(error));
       }
@@ -95,8 +100,9 @@ export function ReviewWorkspace() {
   }, [accountOptions]);
   const accountMonthItems = useMemo(
     () => items.filter((item) => item.record.workDate.startsWith(month)
-      && (!selectedUserId || item.user.id === selectedUserId)),
-    [items, month, selectedUserId],
+      && (!selectedUserId || item.user.id === selectedUserId)
+      && (!needsAssignment || (item.record.status === 2 && (!item.record.reviewerUserId || item.record.reviewerAvailable === false)))),
+    [items, month, selectedUserId, needsAssignment],
   );
   const visibleItems = useMemo(() => {
     const status = filter === 'pending' ? 2 : filter === 'approved' ? 3 : filter === 'rejected' ? 4 : null;
@@ -120,7 +126,7 @@ export function ReviewWorkspace() {
     try {
       const result = await apiRequest<{ record: ReviewSalaryItem['record'] }>(
         `/api/review/salary-records/${item.record.id}`,
-        { method: 'PATCH', body: { decision, auditMemo } },
+        { method: 'PATCH', body: { decision, auditMemo, expectedUpdatedAt: item.record.updatedAt } },
       );
       setItems((current) => current.map((candidate) => candidate.record.id === item.record.id
         ? { ...candidate, record: result.record }
@@ -156,7 +162,7 @@ export function ReviewWorkspace() {
           <label className="review-account-picker">
             <span>查看账号</span>
             <select value={selectedUserId} disabled={interactionLocked} onChange={(event) => setSelectedUserId(event.target.value)}>
-              <option value="">全部账号</option>
+              <option value="">{administrator ? '全部账号' : '全部可审核账号'}</option>
               {accountOptions.map((user) => <option key={user.id} value={user.id}>
                 {user.displayName}{duplicateEmployeeNames.has(user.displayName) ? ` · ${user.email}` : ''}
               </option>)}
@@ -173,6 +179,7 @@ export function ReviewWorkspace() {
         <ReviewSummary label={`已驳回 · ${totals.rejected.count} 条`} amounts={totals.rejected.amounts} tone="rejected" />
       </div>
 
+      {administrator && <label className="access-check"><input type="checkbox" checked={needsAssignment} disabled={interactionLocked} onChange={(event)=>{setNeedsAssignment(event.target.checked);setFilter('all');}} />仅看待分配或审核员失效的申报</label>}
       <div className="filter-bar" role="group" aria-label="审核状态筛选">
         {([
           ['all', '全部'],
@@ -211,6 +218,7 @@ export function ReviewWorkspace() {
                   <div><dt>计费方式</dt><dd>{getApplyTypeLabel(record.applyType)}</dd></div>
                   <div><dt>劳动 / 休息</dt><dd>{formatHours(record.workHours)} / {formatHours(record.restHours)} 小时</dd></div>
                   <div><dt>负责人</dt><dd>{record.checkUser}</dd></div>
+                  <div><dt>指定审核员</dt><dd>{record.reviewerName || '管理员待办'}{record.reviewerUserId && record.reviewerAvailable === false ? '（已停用或权限失效）' : ''}</dd></div>
                 </dl>
                 {record.workContent && <p className="review-card__work-content"><b>工作内容</b><span>{record.workContent}</span></p>}
                 {record.attachments.length > 0 && <div className="attachment-links"><b>工资附件</b>{record.attachments.map((key, index) => (
@@ -224,6 +232,7 @@ export function ReviewWorkspace() {
                     {record.memo && <p><b>员工备注</b>{record.memo}</p>}
                   </div>
                 </details>
+                <div className="row-actions"><RecordDetailsButton record={record} />{administrator && pending && <ReviewAssignment record={record} onSaved={load} />}</div>
                 {pending ? <div className="review-actions">
                   <label><span>审核备注（驳回时必填）</span><textarea maxLength={1000} disabled={interactionLocked} value={notes[record.id] ?? ''} onChange={(event) => setNotes((current) => ({ ...current, [record.id]: event.target.value }))} rows={1} /></label>
                   <div><button type="button" className="secondary-button danger-button" disabled={interactionLocked} onClick={() => void review(item, 'reject')}>驳回</button><button type="button" className="primary-button" disabled={interactionLocked} onClick={() => void review(item, 'approve')}>{busyId === record.id ? '处理中…' : '审核通过'}</button></div>

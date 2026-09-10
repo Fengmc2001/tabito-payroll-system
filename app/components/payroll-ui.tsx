@@ -1,4 +1,4 @@
-import { AuditLogItem, CurrencyAmounts, CurrencyCode } from '../lib/payroll';
+import { AuditLogItem, CurrencyAmounts, CurrencyCode, formatJapanDateTime } from '../lib/payroll';
 
 export function CurrencyBadge({ currency }: { currency: CurrencyCode }) {
   return <span className={`currency-code currency-code--${currency.toLowerCase()}`}>{currency === 'JPY' ? '日元 JPY' : '人民币 CNY'}</span>;
@@ -30,7 +30,7 @@ export function AuditTrailPanel({ logs, title = '最近后台与业务操作' }:
           {logs.map((log) => (
             <article key={log.id}>
               <div><strong>{auditActionLabel(log.action)}</strong><span>{log.actorDisplayName || log.actorEmail || '系统'}</span></div>
-              <div><span>{auditTargetLabel(log.targetType)}</span><time title="日本时间">{new Date(log.createdAt).toLocaleString('zh-CN', { timeZone: 'Asia/Tokyo' })}</time></div>
+              <div><span>{auditTargetLabel(log.targetType)}</span><time title="日本时间">{formatJapanDateTime(log.createdAt)}</time></div>
             </article>
           ))}
         </div>
@@ -65,6 +65,9 @@ export function auditActionLabel(action: string) {
     'salary.rule_delete': '删除自动规律',
     'salary.rule_generate': '自动生成工资',
     'salary.rule_generate_failed': '自动生成失败',
+    'access.update': '更新查看与审核配置',
+    'salary.reassign': '转交工资审核',
+    'salary.reopen': '工资退回修改',
     'salary.approve': '工资审核通过',
     'salary.reject': '工资审核驳回',
     'settings.registration_update': '更新注册开关',
