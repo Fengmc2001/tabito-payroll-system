@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, readdirSync } from 'node:fs';
-import { RESET_KEY, LOCK_KEY, RESET_TABLES, objectKeyPath, acquireResetSql, freezeWritesSql,
+import { RESET_KEY, LEGACY_RESET_KEY, assertLegacyResetFinished, LOCK_KEY, RESET_TABLES, objectKeyPath, acquireResetSql, freezeWritesSql,
   clearBusinessSql, finishResetSql, runServerRelease } from './deployment-reset-plan.mjs';
 
 let checks = 0;
@@ -13,6 +13,15 @@ for (const file of readdirSync(new URL('../drizzle/', import.meta.url)).filter((
 const userSql = `INSERT INTO payroll_users (id,email,password_digest,profile_json,role,status,created_at,updated_at)
   VALUES (?,?,'test-only','{}','admin','active','2026-09-06','2026-09-06')`;
 db.prepare(userSql).run('old-admin', 'old@example.invalid');
+equal(RESET_KEY, 'production_reset_20260913_v1', 'fixed new release marker');
+db.prepare('INSERT INTO payroll_settings (key,value,updated_at) VALUES (?, ?, ?)').run(LEGACY_RESET_KEY, 'complete', '2026-09-06');
+db.exec(`CREATE TRIGGER reset_20260906_payroll_users_insert BEFORE INSERT ON payroll_users
+ WHEN (SELECT value FROM payroll_settings WHERE key = '${LEGACY_RESET_KEY}') IN ('purging','cleared')
+ BEGIN SELECT RAISE(ABORT, 'Legacy maintenance'); END`);
+assertLegacyResetFinished('complete'); assertLegacyResetFinished(undefined); checks += 2;
+for (const phase of ['pending', 'purging', 'clearing', 'cleared']) {
+  assert.throws(() => assertLegacyResetFinished(phase), /旧版本重置尚未完成/); checks++;
+}
 function transaction(sql) {
   db.exec('BEGIN');
   try { db.exec(sql); db.exec('COMMIT'); } catch (error) { db.exec('ROLLBACK'); throw error; }

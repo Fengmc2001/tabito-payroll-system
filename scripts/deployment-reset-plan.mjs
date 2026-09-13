@@ -1,6 +1,11 @@
 import { DEFAULT_DEPARTMENTS } from '../app/lib/payroll.ts';
 
-export const RESET_KEY = 'production_reset_20260906_v1';
+// Fixed release marker; never derive it from deploy time or commit.
+export const RESET_KEY = 'production_reset_20260913_v1';
+export const LEGACY_RESET_KEY = 'production_reset_20260906_v1';
+export function assertLegacyResetFinished(phase) {
+  if (phase && phase !== 'complete') throw new Error('旧版本重置尚未完成；请先用旧版本 --resume 完成恢复，再部署本次版本。');
+}
 export const LOCK_KEY = RESET_KEY + '_owner';
 export const RESET_TABLES = [
   'payroll_access_grants', 'payroll_record_history',
@@ -32,7 +37,7 @@ export function acquireResetSql(owner, previousOwner) {
 
 export function freezeWritesSql() {
   return RESET_TABLES.flatMap((table) => ['INSERT', 'UPDATE', 'DELETE'].map((action) =>
-    `CREATE TRIGGER IF NOT EXISTS reset_20260906_${table}_${action.toLowerCase()}
+    `CREATE TRIGGER IF NOT EXISTS reset_20260913_${table}_${action.toLowerCase()}
       BEFORE ${action} ON ${table}
       WHEN ${phase} IN ('purging','cleared')
       BEGIN SELECT RAISE(ABORT, 'Payroll maintenance in progress'); END`,

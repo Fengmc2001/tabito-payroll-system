@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
 import ts from 'typescript';
-import { RESET_KEY, LOCK_KEY, RESET_TABLES, quote, objectKeyPath, acquireResetSql, freezeWritesSql,
+import { RESET_KEY, LEGACY_RESET_KEY, assertLegacyResetFinished, LOCK_KEY, RESET_TABLES, quote, objectKeyPath, acquireResetSql, freezeWritesSql,
   clearBusinessSql, finishResetSql, runServerRelease } from './deployment-reset-plan.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -45,7 +45,8 @@ async function sql(query) {
 async function state() {
   const tables = await sql("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'payroll_settings'");
   if (!tables[0].results.length) return { phase: 'pending', owner: null };
-  const results = await sql(`SELECT key,value FROM payroll_settings WHERE key IN ('${RESET_KEY}','${LOCK_KEY}')`);
+  const results = await sql(`SELECT key,value FROM payroll_settings WHERE key IN ('${RESET_KEY}','${LOCK_KEY}','${LEGACY_RESET_KEY}')`);
+  assertLegacyResetFinished(results[0].results.find((row) => row.key === LEGACY_RESET_KEY)?.value);
   return {
     phase: results[0].results.find((row) => row.key === RESET_KEY)?.value || 'pending',
     owner: results[0].results.find((row) => row.key === LOCK_KEY)?.value || null,
@@ -99,7 +100,8 @@ try {
     },
     state,
     async confirm() {
-      console.log(`本次首次发布将永久清空工资系统的账号、工资、审批、资料、操作记录及上传附件。
+      console.log(`2026-09-13 版本首次发布将永久清空工资系统的账号、工资、审批、资料、操作记录及上传附件。
+即使服务器完成过 2026-09-06 版本的重置，本次仍会重新初始化一次。
 Cloudflare 账号：${accountId}
 目标 Worker：${config.name}
 目标 D1：${db.database_name}（${db.database_id}）
