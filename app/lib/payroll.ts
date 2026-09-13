@@ -322,7 +322,8 @@ export const ACCOUNT_STATUS_LABELS: Record<AccountStatus, string> = {
   disabled: '已停用',
 };
 
-export const APP_TITLE = '旅人教育入职系统';
+export const COMPANY_NAME = '中国旅人教育集団株式会社';
+export const APP_TITLE = `${COMPANY_NAME}申报系统`;
 export const BOOTSTRAP_ADMIN_EMAIL = 'TabitoAdimin01@tabitoedu.com';
 export const PROFILE_TEXT_MAX_LENGTH = 500;
 export const SALARY_TEXT_MAX_LENGTH = 2000;

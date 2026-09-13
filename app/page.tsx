@@ -31,6 +31,7 @@ import { confirmPageLeave, useFeedback } from './components/interaction-guards';
 import { ApiClientError, apiRequest } from './lib/api-client';
 import {
   APP_TITLE,
+  COMPANY_NAME,
   accountFeatures,
   accountCanReview,
   BOOTSTRAP_ADMIN_EMAIL,
@@ -510,7 +511,7 @@ function AppShell({
     <main className="app-shell">
       <aside className="app-sidebar">
         <button className="brand-lockup" type="button" onClick={() => onNavigate('/')}>
-          <strong><WalletCards size={19} strokeWidth={1.9} aria-hidden="true" />旅人教育</strong>
+          <strong><WalletCards size={19} strokeWidth={1.9} aria-hidden="true" /><span>{COMPANY_NAME}</span></strong>
           <span>工资申报</span>
         </button>
         <nav className="app-nav" aria-label="主菜单">

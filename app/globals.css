@@ -130,6 +130,8 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
   line-height: 1.4;
 }
 
+.auth-card h1 { text-wrap: balance; }
+
 .auth-card__hint,
 .content-card__heading > div > p,
 .landing-card__intro > p {
@@ -302,8 +304,10 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
 }
 
 .brand-lockup strong { font-size: 17px; letter-spacing: .08em; }
-.brand-lockup strong { display: flex; align-items: center; gap: 8px; }
-.brand-lockup span { color: rgb(255 255 255 / 66%); font-size: 11px; letter-spacing: .15em; }
+.brand-lockup strong { display: flex; align-items: center; gap: 8px; line-height: 1.5; }
+.brand-lockup strong svg { flex-shrink: 0; }
+.brand-lockup strong span { text-wrap: balance; }
+.brand-lockup > span { color: rgb(255 255 255 / 66%); font-size: 11px; letter-spacing: .15em; }
 
 .app-nav { display: grid; gap: 6px; min-height: 0; margin-top: 24px; overflow-y: auto; padding-right: 3px; }
 
