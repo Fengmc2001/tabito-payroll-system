@@ -113,7 +113,7 @@ export function ProfileEditor({
     }
     if (!firstTime && tab === 'payment' && (draft.bankFileNames.length < 1 || draft.bankFileNames.length > 2)) {
       setMessageTone('error');
-      setMessage('银行卡正反面至少上传 1 个附件，最多 2 个。');
+      setMessage('银行卡正反面/支付宝账户截图至少上传 1 个附件，最多 2 个。');
       return;
     }
 
@@ -347,7 +347,7 @@ function PaymentFields({
             <option value="alipay">支付宝</option>
           </select>
         </Field>
-        <Field label="银行卡正反面" required>
+        <Field label="银行卡正反面/支付宝账户截图" required>
           <FileNameInput value={draft.bankFileNames} maximum={2} onUpload={onUpload} onChange={(files) => setField('bankFileNames', files)} />
         </Field>
         <Field label={isAlipay ? '支付宝账户' : '银行名称'} required>
@@ -365,7 +365,7 @@ function PaymentFields({
           <input maxLength={PROFILE_TEXT_MAX_LENGTH} value={draft.bankAccountHolder} onChange={(event) => setField('bankAccountHolder', event.target.value)} />
         </Field>
         {(isChina || isAlipay) && (
-          <Field label="收款人是否本人">
+          <Field label="收款人是否本人" required>
             <select value={draft.payeeIsSelf} onChange={(event) => setField('payeeIsSelf', event.target.value as Profile['payeeIsSelf'])}>
               <option value="">请选择</option>
               <option value="是">是</option>

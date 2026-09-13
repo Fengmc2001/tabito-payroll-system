@@ -5,7 +5,7 @@ export async function GET(request: Request) {
   try {
     const actor = await requireSession(request);
     const statusValue = new URL(request.url).searchParams.get('status');
-    if (statusValue && !['2', '3', '4'].includes(statusValue)) {
+    if (statusValue && !['2', '3', '4', '5'].includes(statusValue)) {
       return json({ error: '审核状态筛选无效。' }, { status: 400 });
     }
     const status = statusValue ? Number(statusValue) as SalaryStatus : undefined;

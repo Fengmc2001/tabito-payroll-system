@@ -567,7 +567,7 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
 .row-actions .danger-text { color: var(--xly-danger); }
 
 .salary-draft-section { margin-bottom: 24px; }
-.salary-status-sections { display: grid; gap: 20px; }
+.salary-status-sections { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
 .salary-record-section {
   border: 2px solid var(--xly-border);
   border-radius: 9px;
@@ -1215,3 +1215,66 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
 .record-detail-grid dd { margin: .2rem 0; font-size: 1rem; overflow-wrap: anywhere; }
 @media (max-width: 800px) { .access-editor__grid, .access-targets { grid-template-columns: 1fr; } .record-detail-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } .access-panel { padding: 1rem; } }
 .record-detail-modal { width: min(900px, 94vw); max-height: 90vh; overflow-y: auto; }
+
+/* Long record content must wrap inside its container, including on phones. */
+.record-detail-body { padding: 22px 26px 28px; overflow-wrap: anywhere; }
+.record-detail-body > h3 { margin: 24px 0 14px; padding-top: 18px; border-top: 1px solid var(--xly-border); }
+.record-detail-body .section-heading-inline { align-items: center; flex-wrap: wrap; }
+.record-detail-body .section-heading-inline > span { font-size: 18px; font-weight: 750; color: var(--xly-navy); }
+.record-detail-grid > div, .record-history-entry, .access-card, .content-card, .salary-record-section { min-width: 0; }
+.record-detail-body p { white-space: pre-wrap; line-height: 1.65; }
+.travel-fields { grid-column: 1 / -1; min-width: 0; }
+.travel-fields input::placeholder { color: #8b95a7; opacity: 1; }
+.travel-fields input:disabled { background: #f8f9fc; }
+.status-badge--voided { color: #566273; background: #edf0f3; }
+.review-card--voided { border-left-color: #8994a4; }
+.archive-toggle { margin: 0 0 18px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.payroll-reminder { display: flex; align-items: center; gap: 8px; min-width: 0; margin: -4px 0 24px; border-block: 1px solid #f4cece; padding: 10px 0; color: #ba252a; background: #fff9f9; }
+.payroll-reminder__window { flex: 1; min-width: 0; overflow: hidden; }
+.payroll-reminder__track { display: flex; width: max-content; animation: payroll-reminder-scroll 26s linear infinite; font-family: PayrollReminderPixel, monospace; font-size: 24px; font-weight: 400; line-height: 1.4; white-space: nowrap; }
+.payroll-reminder__track > span { display: block; padding-inline: 12px 48px; }
+.payroll-reminder > button { flex-shrink: 0; display: grid; place-items: center; width: 32px; height: 32px; margin-right: 6px; border: 1px solid #edbfc1; border-radius: 4px; color: inherit; background: white; }
+.payroll-reminder[data-paused=true] .payroll-reminder__track, .payroll-reminder:hover .payroll-reminder__track, .payroll-reminder:focus-within .payroll-reminder__track { animation-play-state: paused; }
+@keyframes payroll-reminder-scroll { to { transform: translateX(-50%); } }
+@media (prefers-reduced-motion: reduce) {
+  .payroll-reminder__track { animation: none; width: auto; white-space: normal; }
+  .payroll-reminder__track > span { padding: 0 12px; }
+  .payroll-reminder__track > span + span, .payroll-reminder > button { display: none; }
+}
+.data-table-wrap { width: 100%; min-width: 0; max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; }
+.salary-table-wrap:focus-visible { outline: 2px solid var(--xly-blue); outline-offset: 2px; }
+.form-grid > *, .access-editor__grid > *, .app-sidebar > *, .payroll-route, .salary-workspace { min-width: 0; }
+input, select, textarea { max-width: 100%; min-width: 0; }
+
+@media (max-width: 900px) {
+  .app-sidebar { grid-template-columns: minmax(0, 1fr) auto; }
+  .app-nav { min-width: 0; max-width: calc(100% + 12px); }
+  .heading-actions, .row-actions, .section-heading-inline, .filter-bar { flex-wrap: wrap; }
+}
+@media (max-width: 640px) {
+  .content-card { padding: 18px 14px; }
+  .salary-record-section { padding: 12px 10px; }
+  .salary-table { min-width: 760px; font-size: 12px; }
+  .salary-table th, .salary-table td { padding: 10px; }
+  .salary-table .row-actions { flex-wrap: nowrap; }
+  .small-modal { max-width: calc(100vw - 20px); margin: 10px auto; }
+  .record-detail-modal { width: calc(100vw - 20px); max-height: calc(100dvh - 20px); }
+  .record-detail-body { padding: 16px; }
+  .record-detail-modal > header { padding: 16px; gap: 8px; }
+  .record-detail-modal h2 { font-size: 18px; }
+  .record-history-entry { padding: 12px; }
+  .record-detail-grid { gap: 14px 12px; }
+  .record-detail-grid dt { font-size: 12px; }
+  .record-detail-grid dd { font-size: 14px; }
+  .record-modal { min-height: 100dvh; }
+  .record-modal__footer > div { flex-wrap: wrap; }
+  .review-card__headline { flex-wrap: wrap; justify-content: flex-start; margin-left: 0; }
+  .account-menu { flex-wrap: wrap; justify-content: flex-end; max-width: 120px; }
+  .brand-lockup strong { font-size: 14px; }
+  .access-panel { padding: 12px; }
+  .access-card { padding: 12px; }
+  .access-check { align-items: flex-start; }
+  .access-check input { margin-top: 3px; }
+  .salary-calculation { grid-template-columns: repeat(2,minmax(0,1fr)); }
+}

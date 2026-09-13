@@ -52,6 +52,7 @@ export function auditActionLabel(action: string) {
     'salary.create': '新建工资记录',
     'salary.update': '修改工资记录',
     'salary.delete': '删除工资记录',
+    'salary.void': '作废工资记录',
     'salary.submit': '提交工资审核',
     'salary.proxy_create': '代他人新建工资',
     'salary.proxy_update': '代他人修改工资',

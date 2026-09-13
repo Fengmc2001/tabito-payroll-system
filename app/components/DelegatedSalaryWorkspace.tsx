@@ -1,4 +1,5 @@
 'use client';
+import { NumberInput, TravelFields } from './PayrollInputs';
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CalendarClock, Pause, Play, RefreshCw, Trash2 } from 'lucide-react';
@@ -252,7 +253,7 @@ export function DelegatedSalaryWorkspace({
       await apiRequest(`/api/staff/payroll/records/${id}?userId=${encodeURIComponent(selection.targetUserId)}&updatedAt=${encodeURIComponent(record.updatedAt)}`, { method: 'DELETE' });
       if (!await refreshTarget(true, selection.revision)) return;
       setNoticeTone('success');
-      setNotice('未提交记录已删除。');
+      setNotice('记录已移除；如有提交历史，已保留为作废记录。');
     } catch (error) {
       if (isSelectionCurrent(selection.revision)) {
         setNoticeTone('error');
@@ -474,7 +475,7 @@ function BatchWorkspace({
 }) {
   const range = monthDateRange(month) ?? monthDateRange(currentMonth())!;
   const [batchMode, setBatchMode] = useState<PayrollBatchMode>('fixed');
-  const [template, setTemplate] = useState(() => defaultTargetRecord(targetUserId, month, departments, workManagers, currentUserId));
+  const [template, setTemplate] = useState<SalaryRecord>(() => ({...defaultTargetRecord(targetUserId, month, departments, workManagers, currentUserId), includeTravel: false}));
   const [fixed, setFixed] = useState<FixedPayrollSchedule>(() => defaultFixedSchedule(month));
   const [calendarSessions, setCalendarSessions] = useState<PayrollScheduleSession[]>([
     { workDate: `${month}-01`, startTime: '18:00', endTime: '20:00', restHours: 0 },
@@ -492,6 +493,7 @@ function BatchWorkspace({
   const updateTemplate = <K extends keyof SalaryRecord>(field: K, value: SalaryRecord[K]) => {
     setTemplate((current) => {
       const next = { ...current, [field]: value };
+      if (field === 'currency' && value !== current.currency) next.includeTravel = false;
       if (field === 'departmentKey') next.departmentLabel = departments.find((item) => item.key === value)?.label ?? '';
       if (field === 'checkUserId') next.checkUser = workManagers.find((item) => item.id === value)?.label ?? '';
       if (field === 'applyType' && value !== 1 && value !== 7) next.restHours = 0;
@@ -673,16 +675,16 @@ function BatchWorkspace({
             </select>
           </Field>
           {template.applyType !== 5 && <Field label="单价" required>
-            <input type="number" min="0" max="10000000" step="1" value={template.rate} onChange={(event) => updateTemplate('rate', Number(event.target.value))} required />
+            <NumberInput value={template.rate} onChange={(value) => updateTemplate('rate', value)} />
           </Field>}
           {showAmount && <Field label={template.applyType === 2 ? '件数' : template.applyType === 3 ? '字数' : '人数'} required>
-            <input type="number" min="0" max="10000000" step="1" value={template.amount} onChange={(event) => updateTemplate('amount', Number(event.target.value))} required />
+            <NumberInput value={template.amount} onChange={(value) => updateTemplate('amount', value)} />
           </Field>}
           <Field label="工作内容" required={template.applyType === 7}>
             <input maxLength={SALARY_TEXT_MAX_LENGTH} value={template.workContent} onChange={(event) => updateTemplate('workContent', event.target.value)} required={template.applyType === 7} />
           </Field>
           <Field label="备注"><input maxLength={SALARY_TEXT_MAX_LENGTH} value={template.memo} onChange={(event) => updateTemplate('memo', event.target.value)} /></Field>
-          {[1, 2, 3, 5].includes(template.applyType) && <Field label="每条交通费"><input type="number" min="0" max="10000000" step="1" value={template.travelFee} onChange={(event) => updateTemplate('travelFee', Number(event.target.value))} /></Field>}
+          {[1, 2, 3, 5].includes(template.applyType) && <TravelFields key={`${template.userId}-${template.currency}`} record={template} batch onChange={(travel) => setTemplate((current) => recalculateRecord({...current, ...travel}))} />}
         </div>
       </FormSection>
 

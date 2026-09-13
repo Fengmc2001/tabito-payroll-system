@@ -12,7 +12,7 @@ export function fullAccessSql(actor: SessionActor, owner: string) {
 export function reviewAccessSql(actor: SessionActor, alias = 'r') {
   return `EXISTS (SELECT 1 FROM payroll_users review_actor WHERE review_actor.id = ${sqlText(actor.userId)}
     AND review_actor.status = 'active' AND (review_actor.role = 'admin' OR
-      (review_actor.role = 'reviewer' AND ${alias}.reviewer_user_id = review_actor.id) OR EXISTS (
+      (review_actor.role = 'reviewer' AND ${alias}.reviewer_user_id = review_actor.id AND ${alias}.user_id != review_actor.id) OR EXISTS (
         SELECT 1 FROM payroll_access_grants review_grant
         WHERE review_grant.viewer_user_id = review_actor.id AND review_grant.subject_user_id = ${alias}.user_id)))`;
 }
@@ -23,9 +23,10 @@ export async function requireReviewWorkspace(db: D1Database, actor: SessionActor
   if (!allowed) throw new ApiError(403, '没有工资审批权限。');
 }
 export function recordAccessSql(actor: SessionActor, alias = 'r') {
-  return `(${alias}.user_id = ${sqlText(actor.userId)} OR
+  return `((${alias}.status != 5 AND (${alias}.user_id = ${sqlText(actor.userId)} OR
+    (${alias}.status != 1 AND (${fullAccessSql(actor, alias + '.user_id')} OR ${reviewAccessSql(actor, alias)})))) OR
     EXISTS (SELECT 1 FROM payroll_users admin_actor WHERE admin_actor.id = ${sqlText(actor.userId)} AND admin_actor.status = 'active' AND admin_actor.role = 'admin')
-    OR (${alias}.status != 1 AND (${fullAccessSql(actor, alias + '.user_id')} OR ${reviewAccessSql(actor, alias)})))`;
+    )`;
 }
 export async function accountAccess(db: D1Database, userId: string, role: AccountRole): Promise<AccountAccess> {
   const [user, grants] = await Promise.all([

@@ -508,17 +508,68 @@ export async function listSalaryRecords(userId: string) {
   const db = await database();
   const result = await db.prepare(`SELECT id, user_id, status, currency, reviewer_user_id, data_json
     FROM payroll_salary_records
-    WHERE user_id = ?
+    WHERE user_id = ? AND status != 5
     ORDER BY work_date DESC, created_at DESC`)
     .bind(userId)
     .all<RecordRow>();
   return result.results.map(recordFromRow);
 }
 
+export async function getTravelDefaults(actor: SessionActor, userId: string, currencyInput: string) {
+  requirePayrollTarget(actor, userId);
+  const currency = sanitizeCurrency(currencyInput);
+  const db = await database();
+  const row = await db.prepare(`SELECT data_json FROM (
+      SELECT h.data_json, h.created_at AS submitted_at, h.id AS sequence
+        FROM payroll_record_history h JOIN payroll_salary_records r ON r.id = h.record_id
+        WHERE r.user_id = ? AND r.status != 5 AND h.status IN (2,3,4)
+      UNION ALL
+      SELECT data_json, updated_at, 0 FROM payroll_salary_records WHERE user_id = ? AND status IN (2,3,4)
+    ) WHERE json_extract(data_json, '$.currency') = ? AND json_extract(data_json, '$.travelFee') > 0
+      AND EXISTS (SELECT 1 FROM payroll_users a WHERE a.id = ? AND a.status = 'active' AND (a.id = ? OR a.role = 'admin'))
+    ORDER BY submitted_at DESC, sequence DESC LIMIT 1`)
+    .bind(userId, userId, currency, actor.userId, userId).first<{data_json: string}>();
+  if (!row) return null;
+  const r = parseRecord(row.data_json, currency);
+  return r ? {travelStart: r.travelStart, travelEnd: r.travelEnd, travelFee: r.travelFee} : null;
+}
+
+export async function voidSalaryRecord(
+  actor: Pick<SessionActor, 'userId' | 'role'>, id: string, expectedUpdatedAt: string, reasonInput: string, paymentChecked: boolean,
+) {
+  const db = await database();
+  const row = await db.prepare('SELECT * FROM payroll_salary_records WHERE id = ?').bind(id).first<RecordRow>();
+  if (!row) throw new ApiError(404, '未找到工资记录。');
+  const record = recordFromRow(row);
+  const user = await db.prepare("SELECT role FROM payroll_users WHERE id = ? AND status = 'active'").bind(actor.userId).first<{role: string}>();
+  if (!user || (user.role !== 'admin' && record.userId !== actor.userId)) throw new ApiError(403, '没有作废该记录的权限。');
+  if (![1,3].includes(record.status)) throw new ApiError(409, '待审或驳回记录请先撤回修改；已作废记录不能再次处理。');
+  if (!expectedUpdatedAt || expectedUpdatedAt !== record.updatedAt) throw new ApiError(409, '记录已发生变化，请刷新后重试。');
+  const reason = cleanStringStrict(reasonInput, 1000, '作废原因');
+  if (!reason.trim()) throw new ApiError(400, '请填写作废原因。');
+  if (record.status === 3) {
+    if (user.role !== 'admin') throw new ApiError(403, '只有管理员可以作废已通过的工资。');
+    if (!paymentChecked) throw new ApiError(400, '请先核对是否已经付款；作废不会撤销已发生的转账。');
+  }
+  const now = nextVersionTimestamp(record.updatedAt);
+  const auditId = newId('audit');
+  const next: SalaryRecord = {...record, status: 5, statusBeforeVoid: record.status, voidedAt: now, voidedByUserId: actor.userId, voidReason: reason, updatedAt: now};
+  const [mutation] = await db.batch([
+    db.prepare(`UPDATE payroll_salary_records SET status = 5, data_json = ?, updated_at = ?
+      WHERE id = ? AND status = ? AND updated_at = ? AND EXISTS (
+        SELECT 1 FROM payroll_users a WHERE a.id = ? AND a.status = 'active'
+          AND (a.role = 'admin' OR (a.id = payroll_salary_records.user_id AND payroll_salary_records.status = 1)))`)
+      .bind(JSON.stringify(next), now, id, record.status, expectedUpdatedAt, actor.userId),
+    changedSalaryAuditStatement(db, auditId, actor.userId, 'salary.void', id, {subjectUserId: record.userId, businessMonth: record.workDate.slice(0,7), reason, previousStatus: record.status, paymentChecked}, now),
+    ...recordLifecycleStatements(db, [id], auditId),
+  ]);
+  if (!mutation.meta.changes) throw new ApiError(409, '记录或账号权限已发生变化，请刷新后重试。');
+}
+
 export async function getSalaryRecord(userId: string, id: string) {
   const db = await database();
   const row = await db.prepare(`SELECT id, user_id, status, currency, reviewer_user_id, data_json
-    FROM payroll_salary_records WHERE id = ? AND user_id = ?`)
+    FROM payroll_salary_records WHERE id = ? AND user_id = ? AND status != 5`)
     .bind(id, userId)
     .first<RecordRow>();
   if (!row) throw new ApiError(404, '未找到工资记录。');
@@ -584,7 +635,10 @@ export async function deleteSalaryRecord(userId: string, id: string, expectedUpd
   const db = await database();
   const existing = await getSalaryRecord(userId, id);
   if (existing.status !== 1) throw new ApiError(409, '仅未提交记录可以删除。');
-  if (await db.prepare("SELECT id FROM payroll_record_history WHERE record_id = ? AND status != 1 LIMIT 1").bind(id).first()) throw new ApiError(409, '这条记录已有提交或审批历史，不能删除；可修改后重新申报。');
+  if (await db.prepare("SELECT id FROM payroll_record_history WHERE record_id = ? AND status != 1 LIMIT 1").bind(id).first()) {
+    await voidSalaryRecord({userId, role: 'employee'}, id, expectedUpdatedAt ?? '', '申报人移除', false);
+    return;
+  }
   if (!expectedUpdatedAt || expectedUpdatedAt !== existing.updatedAt) {
     throw new ApiError(409, '该记录已经发生变化，请刷新后重试。');
   }
@@ -675,7 +729,7 @@ export async function listProxySalaryRecords(actor: SessionActor, targetUserId: 
   const db = await database();
   await requireTargetUser(db, targetUserId, false);
   const result = await db.prepare(`SELECT id, user_id, status, currency, reviewer_user_id, data_json
-    FROM payroll_salary_records WHERE user_id = ? AND work_date LIKE ?
+    FROM payroll_salary_records WHERE user_id = ? AND status != 5 AND work_date LIKE ?
     ORDER BY work_date DESC, created_at DESC`)
     .bind(targetUserId, `${month}-%`)
     .all<RecordRow>();
@@ -785,7 +839,10 @@ export async function deleteProxySalaryRecord(
   await requireTargetUser(db, targetUserId, false);
   const existing = await salaryRecordForOwner(db, targetUserId, id);
   if (existing.status !== 1) throw new ApiError(409, '仅未提交记录可以删除。');
-  if (await db.prepare("SELECT id FROM payroll_record_history WHERE record_id = ? AND status != 1 LIMIT 1").bind(id).first()) throw new ApiError(409, '这条记录已有提交或审批历史，不能删除；可修改后重新申报。');
+  if (await db.prepare("SELECT id FROM payroll_record_history WHERE record_id = ? AND status != 1 LIMIT 1").bind(id).first()) {
+    await voidSalaryRecord(actor, id, expectedUpdatedAt ?? '', '管理员移除未提交记录', false);
+    return;
+  }
   if (!expectedUpdatedAt || expectedUpdatedAt !== existing.updatedAt) {
     throw new ApiError(409, '该记录已经发生变化，请刷新后重试。');
   }
@@ -1234,6 +1291,7 @@ export async function listReviewSalaryRecords(
   const db = await database();
   await requireReviewWorkspace(db, actor);
   const allowedStatuses: SalaryStatus[] = [2, 3, 4];
+  if (status === 5) { requireRole(actor, ['admin']); allowedStatuses.push(5); }
   if (status && !allowedStatuses.includes(status)) throw new ApiError(400, '审核状态筛选无效。');
   const query = status
     ? `SELECT r.id, r.user_id, r.status, r.currency, r.reviewer_user_id, r.data_json, u.email, u.profile_json
@@ -1310,7 +1368,7 @@ export async function updateAccountAccess(actor: SessionActor, userId: string, i
   if (!target) throw new ApiError(404, '账号不存在。');
   if (!input || input.expectedUpdatedAt !== target.updated_at) throw new ApiError(409, '账号配置已变化，请刷新后重试。');
   if (!input.features || ['summary','employees','audit'].some((key) => typeof input.features[key as keyof AccountAccess['features']] !== 'boolean')) throw new ApiError(400, '功能权限格式错误。');
-  if (!Array.isArray(input.subjectUserIds) || input.subjectUserIds.length > 500 || input.subjectUserIds.some((id) => typeof id !== 'string' || !id || id === userId)) throw new ApiError(400, '请选择有效的员工账号，不需要授权查看自己。');
+  if (!Array.isArray(input.subjectUserIds) || input.subjectUserIds.length > 500 || input.subjectUserIds.some((id) => typeof id !== 'string' || !id)) throw new ApiError(400, '请选择有效的员工账号。');
   const ids = [...new Set(input.subjectUserIds)];
   const count = await db.prepare('SELECT COUNT(*) AS count FROM payroll_users WHERE id IN (SELECT value FROM json_each(?))').bind(JSON.stringify(ids)).first<{count: number}>();
   if (count?.count !== ids.length) throw new ApiError(400, '部分员工账号不存在。');
@@ -1667,11 +1725,11 @@ export async function getStaffTransferSheet(actor: SessionActor, requestedMonth?
   const filter = scope === 'assigned' ? `r.reviewer_user_id = ${sqlText(actor.userId)}` : scope === 'granted'
     ? fullAccessSql(actor, 'r.user_id') : recordAccessSql(actor);
   const result = await db.prepare(`SELECT r.* FROM payroll_salary_records r
-    WHERE r.status != 1 AND r.work_date LIKE ? AND ${recordAccessSql(actor)} AND ${filter}
+    WHERE r.status IN (2, 3, 4) AND r.work_date LIKE ? AND ${recordAccessSql(actor)} AND ${filter}
     ORDER BY r.work_date DESC, r.created_at DESC`).bind(month + '-%').all<RecordRow>();
   const users = await db.prepare(`SELECT u.*, ${fullAccessSql(actor, 'u.id')} AS complete_profile FROM payroll_users u WHERE
     ${fullAccessSql(actor, 'u.id')} OR EXISTS (SELECT 1 FROM payroll_salary_records r
-      WHERE r.user_id = u.id AND r.status != 1 AND r.work_date LIKE ? AND ${recordAccessSql(actor)} AND ${filter})
+      WHERE r.user_id = u.id AND r.status IN (2, 3, 4) AND r.work_date LIKE ? AND ${recordAccessSql(actor)} AND ${filter})
     ORDER BY u.created_at ASC`).bind(month + '-%').all<UserRow & {complete_profile: number}>();
   const fullIds = users.results.filter((user) => user.complete_profile).map((user) => user.id);
   const files = await db.prepare(`SELECT *, '' AS reference_types FROM payroll_files f
@@ -2120,6 +2178,10 @@ async function sanitizeSalaryRecord(
   const workManager = await resolveWorkManager(db, input.checkUserId, input.checkUser);
   if (!workManager) throw new ApiError(400, '工作负责人无效或已停用。');
   const attachments = cleanFileKeys(input.attachments, 8);
+  for (const field of ['rate', 'amount', 'travelFee', 'restHours'] as const) {
+    if (typeof input[field] !== 'number' || !Number.isFinite(input[field])) throw new ApiError(400, '金额、数量和休息时间必须是有效数字。');
+  }
+  if (input.includeTravel !== undefined && typeof input.includeTravel !== 'boolean') throw new ApiError(400, '交通费选项无效。');
   await assertOwnedFiles(db, userId, attachments);
   const now = existing ? nextVersionTimestamp(existing.updatedAt) : new Date().toISOString();
   const record = recalculateRecord({
@@ -2141,6 +2203,7 @@ async function sanitizeSalaryRecord(
     travelStart: cleanStringStrict(input.travelStart, 300, '交通出发地'),
     travelEnd: cleanStringStrict(input.travelEnd, 300, '交通到达地'),
     travelFee: boundedNumber(input.travelFee, 0, 10_000_000),
+    includeTravel: input.includeTravel,
     totalHours: 0,
     workHours: 0,
     restHours: boundedNumber(input.restHours, 0, 24),
@@ -2404,7 +2467,7 @@ async function queryAccountAuditLogs(db: D1Database, userId: string, month?: str
 async function listStaffEmployeesInternal(db: D1Database, actor: SessionActor, fullOnly = false): Promise<EmployeeSummary[]> {
   const [usersResult, recordsResult] = await Promise.all([
     db.prepare(`SELECT * FROM payroll_users u WHERE ${fullAccessSql(actor, 'u.id')} ${fullOnly ? '' : 'OR EXISTS (SELECT 1 FROM payroll_salary_records r WHERE r.user_id = u.id AND r.status != 1 AND ' + recordAccessSql(actor) + ')'} ORDER BY created_at ASC`).all<UserRow>(),
-    db.prepare(`SELECT id, user_id, status, currency, reviewer_user_id, data_json FROM payroll_salary_records r WHERE ${recordAccessSql(actor)}
+    db.prepare(`SELECT id, user_id, status, currency, reviewer_user_id, data_json FROM payroll_salary_records r WHERE r.status != 5 AND ${recordAccessSql(actor)}
       ORDER BY work_date DESC, created_at DESC`).all<RecordRow>(),
   ]);
   const recordsByUser = new Map<string, SalaryRecord[]>();
@@ -2531,7 +2594,7 @@ async function actorDisplayName(db: D1Database, actor: SessionActor) {
 
 async function salaryRecordForOwner(db: D1Database, userId: string, id: string) {
   const row = await db.prepare(`SELECT id, user_id, status, currency, reviewer_user_id, data_json
-    FROM payroll_salary_records WHERE id = ? AND user_id = ?`).bind(id, userId).first<RecordRow>();
+    FROM payroll_salary_records WHERE id = ? AND user_id = ? AND status != 5`).bind(id, userId).first<RecordRow>();
   if (!row) throw new ApiError(404, '未找到工资记录。');
   return recordFromRow(row);
 }
@@ -2567,6 +2630,7 @@ async function replaySalaryBatch(
     .all<RecordRow>();
   const byId = new Map(result.results.map((record) => [record.id, recordFromRow(record)]));
   if (byId.size !== ids.length) throw new ApiError(409, '该批次的部分工资记录已被删除。');
+  if (result.results.some((record) => record.status === 5)) throw new ApiError(409, '该批次包含已作废记录，请刷新后新建申报。');
   return ids.map((id) => byId.get(id)!);
 }
 
@@ -2836,6 +2900,7 @@ async function hashProxyPayrollBatchInput(input: ProxyPayrollBatchInput) {
     travelStart: normalizedHashString(template.travelStart),
     travelEnd: normalizedHashString(template.travelEnd),
     travelFee: normalizedHashNumber(template.travelFee),
+    includeTravel: template.includeTravel,
     attachments: Array.isArray(template.attachments)
       ? template.attachments.map(normalizedHashString).filter(Boolean).sort()
       : [],

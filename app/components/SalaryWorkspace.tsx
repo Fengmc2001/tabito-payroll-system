@@ -1,6 +1,8 @@
 'use client';
 
 import { RecordDetailsButton } from './RecordDetailsButton';
+import { NumberInput, TravelFields } from './PayrollInputs';
+import { PayrollReminder } from './PayrollReminder';
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from 'react';
 import { FileNameInput, Field, FormSection, StatusMessage, invalidFormControlMessage } from './form-controls';
 import { useFeedback, useModalFocus, useUnsavedChanges, useUploadTracker } from './interaction-guards';
@@ -114,7 +116,7 @@ export function SalaryWorkspace({
     setBusy(true);
     void onDelete(id).then(() => {
       setNoticeTone('success');
-      setNotice('未提交记录已删除。');
+      setNotice('记录已移除；如有提交历史，已保留为作废记录。');
     }).catch((error) => {
       setNoticeTone('error');
       setNotice(messageFrom(error));
@@ -173,6 +175,7 @@ export function SalaryWorkspace({
 
   return (
     <section className="content-card salary-workspace">
+      <PayrollReminder />
       <div className="content-card__heading salary-workspace__heading">
         <div>
           {!embedded && <p className="eyebrow">02 工资申报</p>}
@@ -324,8 +327,8 @@ export function SalaryTable({
   const hasActions = !readOnly && Boolean(onEdit || onCopy || onDelete || onReopen);
 
   return (
-    <div className="data-table-wrap">
-      <table className="data-table">
+    <div className="data-table-wrap salary-table-wrap" tabIndex={0} role="region" aria-label="工资表（可左右滑动）">
+      <table className="data-table salary-table">
         <thead>
           <tr>
             <th>日期</th>
@@ -342,21 +345,21 @@ export function SalaryTable({
             const status = STATUS[record.status];
             return (
               <tr key={record.id}>
-                <td>{record.workDate}</td>
-                <td>{record.checkUser || '-'}</td>
-                <td>{getDepartmentLabel(record.departmentKey, record.departmentLabel)}</td>
-                <td>{getApplyTypeLabel(record.applyType)}</td>
-                <td><Money amount={record.finalSalary} currency={record.currency} /></td>
-                <td>
+                <td data-label="日期">{record.workDate}</td>
+                <td data-label="负责人">{record.checkUser || '-'}</td>
+                <td data-label="部门">{getDepartmentLabel(record.departmentKey, record.departmentLabel)}</td>
+                <td data-label="计费方式">{getApplyTypeLabel(record.applyType)}</td>
+                <td data-label="工作收入"><Money amount={record.finalSalary} currency={record.currency} /></td>
+                <td data-label="状态">
                   <span className={`status-badge status-badge--${status.tone}`}>{status.label}</span>
                   {record.auditMemo && <small className="salary-audit-note">{record.auditMemo}</small>}
                 </td>
-                <td><RecordDetailsButton record={record} /></td>{hasActions && <td>
+                <td data-label="详情"><RecordDetailsButton record={record} /></td>{hasActions && <td data-label="操作">
                   <div className="row-actions">
                     {record.status === 1 && onEdit && <button type="button" onClick={() => onEdit(record)}>编辑</button>}
                     {onReopen && [2,4].includes(record.status) && <button type="button" onClick={() => onReopen(record)}>{record.status === 2 ? '撤回修改' : '修改重提'}</button>}
                     {onCopy && <button type="button" onClick={() => onCopy(record)}>复制</button>}
-                    {record.status === 1 && onDelete && <button type="button" className="danger-text" onClick={() => onDelete(record.id)}>删除</button>}
+                    {record.status === 1 && onDelete && <button type="button" className="danger-text" onClick={() => { if (window.confirm('移除这条记录？从未提交的草稿将删除，有提交历史的记录会保留为已作废。')) onDelete(record.id); }}>移除</button>}
                   </div>
                 </td>}
               </tr>
@@ -422,16 +425,17 @@ export function SalaryRecordDialog({
   directSubmitDisabled?: boolean;
   busy?: boolean;
 }) {
-  const [draft, setDraft] = useState(() => {
+  const [initialDraft] = useState(() => {
     const manager = resolveWorkManager(workManagers, initial.checkUserId, initial.checkUser);
-    return recalculateRecord({ ...initial, checkUserId: manager?.id ?? '', checkUser: manager?.label ?? '' });
+    return recalculateRecord({ ...initial, includeTravel: initial.includeTravel ?? initial.travelFee > 0, checkUserId: manager?.id ?? '', checkUser: manager?.label ?? '' });
   });
+  const [draft, setDraft] = useState(initialDraft);
   const [error, setError, errorRevision] = useFeedback();
   const [saving, setSaving] = useState(false);
   const { uploading, trackUpload } = useUploadTracker(onUpload);
   const locked = busy || saving || uploading;
   const modalRef = useModalFocus(onClose, locked);
-  useUnsavedChanges(JSON.stringify(draft) !== JSON.stringify(recalculateRecord(initial)), locked);
+  useUnsavedChanges(JSON.stringify(draft) !== JSON.stringify(initialDraft), locked);
   const allowedTypes = APPLY_TYPES.map((item) => item.value);
   const showRate = draft.applyType !== 5;
   const showTime = draft.applyType === 1 || draft.applyType === 7;
@@ -441,6 +445,7 @@ export function SalaryRecordDialog({
   const update = <K extends keyof SalaryRecord>(field: K, value: SalaryRecord[K]) => {
     setDraft((current) => {
       const next = { ...current, [field]: value };
+      if (field === 'currency' && value !== current.currency) next.includeTravel = false;
       if (field === 'departmentKey') {
         const nextDepartment = departments.find((item) => item.key === value);
         next.departmentLabel = nextDepartment?.label ?? '';
@@ -563,7 +568,7 @@ export function SalaryRecordDialog({
               <div className="form-grid form-grid--two">
                 {showRate && (
                   <Field label="工作单价" required>
-                    <input type="number" min="0" max="10000000" step="1" value={draft.rate} onChange={(event) => update('rate', Number(event.target.value))} />
+                    <NumberInput value={draft.rate} onChange={(value) => update('rate', value)} />
                   </Field>
                 )}
                 {showTime && (
@@ -591,24 +596,10 @@ export function SalaryRecordDialog({
                 )}
                 {showAmount && (
                   <Field label={draft.applyType === 2 ? '件数' : draft.applyType === 3 ? '字数' : '人数'} required>
-                    <input type="number" min="0" max="10000000" step="1" value={draft.amount} onChange={(event) => update('amount', Number(event.target.value))} />
+                    <NumberInput value={draft.amount} onChange={(value) => update('amount', value)} />
                   </Field>
                 )}
-                {showTravel && (
-                  <Field label="交通起点">
-                    <input maxLength={300} value={draft.travelStart} onChange={(event) => update('travelStart', event.target.value)} />
-                  </Field>
-                )}
-                {showTravel && (
-                  <Field label="交通终点">
-                    <input maxLength={300} value={draft.travelEnd} onChange={(event) => update('travelEnd', event.target.value)} />
-                  </Field>
-                )}
-                {showTravel && (
-                  <Field label="交通费（往返）">
-                    <input type="number" min="0" max="10000000" step="1" value={draft.travelFee} onChange={(event) => update('travelFee', Number(event.target.value))} />
-                  </Field>
-                )}
+                {showTravel && <TravelFields key={`${draft.userId}-${draft.currency}`} record={draft} onChange={(travel) => setDraft((current) => recalculateRecord({...current, ...travel}))} />}
                 <Field label="附件">
                   <FileNameInput value={draft.attachments} maximum={8} onUpload={trackUpload} onChange={(files) => update('attachments', files)} />
                 </Field>

@@ -64,5 +64,6 @@ jobs:
           fi
           PAYROLL_TEST_BASE_URL=http://localhost:3200 PAYROLL_TEST_ADMIN_PASSWORD='CI-Only-Admin-2026!' npm run self-check:backend
           PAYROLL_TEST_BASE_URL=http://localhost:3200 PAYROLL_TEST_ADMIN_PASSWORD='CI-Only-Admin-2026!' npm run self-check:proxy
-          PAYROLL_TEST_BASE_URL=http://localhost:3200 PAYROLL_TEST_ADMIN_PASSWORD='CI-Only-Admin-2026!' npm run self-check:permissions
+          PAYROLL_TEST_BASE_URL=http://localhost:3200 PAYROLL_TEST_ADMIN_PASSWORD='CI-Only-Admin-2026!' PAYROLL_TEST_SAVE_ACCOUNTS=1 npm run self-check:permissions
+          PAYROLL_TEST_BASE_URL=http://localhost:3200 npm run self-check:void-travel
           curl --fail --silent --show-error http://localhost:3200/cdn-cgi/local/scheduled > /dev/null

@@ -17,7 +17,7 @@ export type AppRoute =
   | '/audit/overview';
 
 export type SalaryApplyType = 1 | 2 | 3 | 4 | 5 | 6 | 7;
-export type SalaryStatus = 1 | 2 | 3 | 4;
+export type SalaryStatus = 1 | 2 | 3 | 4 | 5;
 export type AccountRole = 'employee' | 'reviewer' | 'admin';
 export type AccessFeatures = { summary: boolean; employees: boolean; audit: boolean };
 export type AccountAccess = { features: AccessFeatures; subjectUserIds: string[]; reviewerUserId: string | null };
@@ -75,6 +75,11 @@ export type Profile = {
 };
 
 export type SalaryRecord = {
+  includeTravel?: boolean;
+  voidedAt?: string;
+  voidedByUserId?: string;
+  voidReason?: string;
+  statusBeforeVoid?: SalaryStatus;
   reviewerUserId?: string | null;
   reviewerName?: string;
   reviewerAvailable?: boolean;
@@ -395,6 +400,7 @@ export const STATUS: Record<SalaryStatus, { label: string; tone: string }> = {
   2: { label: '待审核', tone: 'pending' },
   3: { label: '审核通过', tone: 'approved' },
   4: { label: '审核驳回', tone: 'rejected' },
+  5: { label: '已作废', tone: 'voided' },
 };
 
 export const createEmptyProfile = (): Profile => ({
@@ -502,6 +508,9 @@ export function createRecord(userId: string): SalaryRecord {
 }
 
 export function recalculateRecord(record: SalaryRecord): SalaryRecord {
+  if (record.includeTravel === false || ![1, 2, 3, 5].includes(record.applyType)) {
+    record = { ...record, includeTravel: false, travelStart: '-', travelEnd: '-', travelFee: 0 };
+  }
   const hasTime = record.applyType === 1 || record.applyType === 7;
   const totalMinutes = hasTime ? getWorkMinutes(record.startTime, record.endTime) : 0;
   const totalHours = Number((totalMinutes / 60).toFixed(2));
@@ -645,7 +654,7 @@ export function profileMissingRequirements(profile: Profile) {
     if (!profile.addressOfLicense.trim()) missing.push('证件上住址所在地');
   }
   if (!profile.bankType) missing.push('工资收款方式');
-  if (profile.bankFileNames.length < 1 || profile.bankFileNames.length > 2) missing.push('银行卡正反面');
+  if (profile.bankFileNames.length < 1 || profile.bankFileNames.length > 2) missing.push('银行卡正反面/支付宝账户截图');
   if (!profile.bankName.trim()) missing.push(profile.bankType === 'alipay' ? '支付宝账户' : '银行名称');
   if (!profile.bankAccountNumber.trim()) missing.push('收款账号');
   if (!profile.bankAccountHolder.trim()) missing.push('账户名');
@@ -671,6 +680,11 @@ export function cloneAsDraft(record: SalaryRecord, userId: string) {
   const timestamp = new Date().toISOString();
   return recalculateRecord({
     ...record,
+    includeTravel: false,
+    voidedAt: undefined,
+    voidedByUserId: undefined,
+    voidReason: undefined,
+    statusBeforeVoid: undefined,
     id: makeId('salary'),
     userId,
     status: 1,

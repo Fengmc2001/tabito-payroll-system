@@ -157,7 +157,7 @@ await req('/api/salary-records/'+teaching.id+'/reopen',a,'POST',{expectedUpdated
 await req('/api/salary-records/'+teaching.id+'/history',r2,'GET',undefined,403);
 let own=(await req('/api/users',a)).data.account;
 const reopened=own.salaryRecords.find(r=>r.id===teaching.id);
-await req('/api/salary-records/'+teaching.id+'?updatedAt='+encodeURIComponent(reopened.updatedAt),a,'DELETE',undefined,409);
+await req('/api/salary-records/'+teaching.id+'?updatedAt='+encodeURIComponent('stale-version'),a,'DELETE',undefined,409);
 await req('/api/salary-records/'+teaching.id,a,'PATCH',{...reopened,rate:31000,attachments:[],reviewerUserId:r2.account.id});
 await req('/api/files?key='+encodeURIComponent(proofA),a,'DELETE',undefined,409);
 await req('/api/salary-records/apply/'+a.account.id,a,'POST',{month});
@@ -183,8 +183,10 @@ await access(b,{reviewerUserId:null});
 await manage(r2,{status:'active'});
 const reviewerOwn=await create(r1,admin,'审核员本人申报',1000);
 await req('/api/salary-records/apply/'+r1.account.id,r1,'POST',{month});
+await req('/api/review/salary-records/'+reviewerOwn.id,r1,'PATCH',{decision:'approve'},403);
+await access(r1,{subjectUserIds:[r1.account.id]});
 await req('/api/review/salary-records/'+reviewerOwn.id,r1,'PATCH',{decision:'approve'});
-ok(true,'self approval remains permitted when explicitly assigned');
+ok(true,'self approval requires an explicit self grant, not assignment alone');
 // Recurring authority follows the current executor, never a historical reviewer role.
 await manage(r2,{role:'admin'});
 const fixed={...batch,requestId:'batch-request-'+randomUUID(),targetUserId:a.account.id,submit:false,mode:'fixed',

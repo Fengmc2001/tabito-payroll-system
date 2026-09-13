@@ -19,6 +19,7 @@ function RecordDetails({id, onClose}: {id: string; onClose: () => void}) {
   return <div className="modal-backdrop"><section ref={modalRef} tabIndex={-1} className="small-modal record-detail-modal" role="dialog" aria-modal="true" aria-label="工资明细与审批记录">
     <header><h2>工资明细与审批记录</h2><button type="button" className="icon-button" onClick={onClose} aria-label="关闭详情">×</button></header>
     <HistoryLoader id={id} onResult={setResult} onError={setMessage} onStart={setStarted} />
+    <div className="record-detail-body">
     {message ? <p role="alert">{message}</p> : !result ? <p>{started ? '正在加载…' : '正在检查查看权限…'}</p> : <>
       <RecordContent record={result.record} />
       <h3>提交与审批记录</h3>
@@ -27,6 +28,7 @@ function RecordDetails({id, onClose}: {id: string; onClose: () => void}) {
         {h.record ? <details><summary>查看当时的申报内容</summary><RecordContent record={h.record} /></details> : <p>{h.auditMemo && <span>审核备注：{h.auditMemo}<br /></span>}旧版操作记录未保存当时的明细快照。</p>}
       </article>) : <p>这条旧申报尚无历史快照，现有审批结果见上方。</p>}</div>
     </>}
+    </div>
   </section></div>;
 }
 import { useEffect } from 'react';
@@ -53,11 +55,13 @@ function RecordContent({record:r}: {record: SalaryRecord}) {
     </dl>
     <p><b>工作内容：</b>{r.workContent || '—'}</p><p><b>备注：</b>{r.memo || '—'}</p>
     {r.auditMemo && <p><b>审核备注：</b>{r.auditMemo}</p>}
+    {r.voidedAt && <p><b>作废：</b>{formatJapanDateTime(r.voidedAt)} · {r.voidReason}</p>}
     {r.checkDate && <p>审批时间：{formatJapanDateTime(r.checkDate)}</p>}
     <div className="attachment-links">{r.attachments.map((key,index) => <a key={key} href={appPath('/api/files?key=' + encodeURIComponent(key))} target="_blank" rel="noreferrer">附件 {index+1}</a>)}</div>
   </div>;
 }
 function historyAction(action: string) {
+  if (action === 'salary.void') return '作废申报';
   const names: Record<string,string> = {'salary.create':'创建草稿','salary.update':'修改草稿','salary.submit':'提交审核','salary.approve':'审核通过','salary.reject':'驳回','salary.reopen':'撤回或退回修改','salary.reassign':'转交审核','salary.proxy_submit':'代报提交','salary.proxy_create':'创建代报','salary.proxy_update':'修改代报','salary.proxy_batch_submit':'批量提交','salary.proxy_batch_create':'批量创建','salary.rule_generate':'定期生成'};
   return names[action] || '申报变更';
 }

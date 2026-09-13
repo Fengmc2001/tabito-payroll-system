@@ -1,6 +1,7 @@
 'use client';
 
 import { RecordDetailsButton } from './RecordDetailsButton';
+import { VoidSalaryButton } from './VoidSalaryButton';
 import { ReviewAssignment } from './ReviewAssignment';
 import { appPath } from '../lib/app-path';
 
@@ -22,12 +23,13 @@ import {
 import { AuditTrailPanel, CurrencyAmountsView, Money } from './payroll-ui';
 import { StatusMessage } from './form-controls';
 
-type Filter = 'all' | 'pending' | 'approved' | 'rejected';
+type Filter = 'all' | 'pending' | 'approved' | 'rejected' | 'voided';
 
 export function ReviewWorkspace({ administrator = false }: {administrator?: boolean}) {
   const [items, setItems] = useState<ReviewSalaryItem[]>([]);
   const [logs, setLogs] = useState<AuditLogItem[]>([]);
   const [filter, setFilter] = useState<Filter>('all');
+  const archiveMode = administrator && filter === 'voided';
   const [needsAssignment, setNeedsAssignment] = useState(false);
   const [month, setMonth] = useState(currentMonth);
   const [selectedUserId, setSelectedUserId] = useState('');
@@ -44,7 +46,7 @@ export function ReviewWorkspace({ administrator = false }: {administrator?: bool
     setLoading(true);
     try {
       const [reviewResult, logResult] = await Promise.all([
-        apiRequest<{ items: ReviewSalaryItem[] }>('/api/review/salary-records'),
+        apiRequest<{ items: ReviewSalaryItem[] }>(archiveMode ? '/api/review/salary-records?status=5' : '/api/review/salary-records'),
         apiRequest<{ logs: AuditLogItem[] }>('/api/audit/recent'),
       ]);
       if (requestRevision.current === revision) {
@@ -62,13 +64,13 @@ export function ReviewWorkspace({ administrator = false }: {administrator?: bool
     } finally {
       if (requestRevision.current === revision) setLoading(false);
     }
-  }, [setMessage]);
+  }, [setMessage, archiveMode]);
 
   useEffect(() => {
     const revision = requestRevision.current + 1;
     requestRevision.current = revision;
     void Promise.all([
-      apiRequest<{ items: ReviewSalaryItem[] }>('/api/review/salary-records'),
+      apiRequest<{ items: ReviewSalaryItem[] }>(archiveMode ? '/api/review/salary-records?status=5' : '/api/review/salary-records'),
       apiRequest<{ logs: AuditLogItem[] }>('/api/audit/recent'),
     ]).then(([reviewResult, logResult]) => {
       if (requestRevision.current === revision) {
@@ -86,7 +88,7 @@ export function ReviewWorkspace({ administrator = false }: {administrator?: bool
       if (requestRevision.current === revision) setLoading(false);
     });
     return () => { requestRevision.current += 1; };
-  }, [setMessage]);
+  }, [setMessage, archiveMode]);
 
   const accountOptions = useMemo(() => {
     const users = new Map<string, ReviewSalaryItem['user']>();
@@ -105,8 +107,8 @@ export function ReviewWorkspace({ administrator = false }: {administrator?: bool
     [items, month, selectedUserId, needsAssignment],
   );
   const visibleItems = useMemo(() => {
-    const status = filter === 'pending' ? 2 : filter === 'approved' ? 3 : filter === 'rejected' ? 4 : null;
-    return status ? accountMonthItems.filter((item) => item.record.status === status) : accountMonthItems;
+    const status = filter === 'pending' ? 2 : filter === 'approved' ? 3 : filter === 'rejected' ? 4 : filter === 'voided' ? 5 : null;
+    return status ? accountMonthItems.filter((item) => item.record.status === status) : accountMonthItems.filter((item) => item.record.status !== 5);
   }, [accountMonthItems, filter]);
   const totals = useMemo(() => ({
     pending: summarize(accountMonthItems, 2),
@@ -173,11 +175,11 @@ export function ReviewWorkspace({ administrator = false }: {administrator?: bool
         </div>
       </div>
 
-      <div className="summary-grid summary-grid--three">
+      {!archiveMode && <div className="summary-grid summary-grid--three">
         <ReviewSummary label={`待审核 · ${totals.pending.count} 条`} amounts={totals.pending.amounts} tone="pending" />
         <ReviewSummary label={`已通过 · ${totals.approved.count} 条`} amounts={totals.approved.amounts} tone="approved" />
         <ReviewSummary label={`已驳回 · ${totals.rejected.count} 条`} amounts={totals.rejected.amounts} tone="rejected" />
-      </div>
+      </div>}
 
       {administrator && <label className="access-check"><input type="checkbox" checked={needsAssignment} disabled={interactionLocked} onChange={(event)=>{setNeedsAssignment(event.target.checked);setFilter('all');}} />仅看待分配或审核员失效的申报</label>}
       <div className="filter-bar" role="group" aria-label="审核状态筛选">
@@ -192,6 +194,8 @@ export function ReviewWorkspace({ administrator = false }: {administrator?: bool
       </div>
 
       <StatusMessage message={message} eventId={feedbackRevision} tone={tone} />
+      {administrator && <button type="button" className="secondary-button archive-toggle" disabled={interactionLocked} onClick={() => {setNeedsAssignment(false); setFilter(archiveMode ? 'all' : 'voided');}}>{archiveMode ? '返回正常申报' : '查看已作废记录'}</button>}
+      {archiveMode && <h2>已作废记录 · {visibleItems.length} 条</h2>}
 
       {loading ? <div className="empty-state">正在加载审核队列…</div> : visibleItems.length === 0 ? (
         <div className="empty-state">{selectedUserId ? '该账号在当前月份与状态下没有工资记录。' : '当前月份与状态下没有工资记录。'}</div>
@@ -232,7 +236,8 @@ export function ReviewWorkspace({ administrator = false }: {administrator?: bool
                     {record.memo && <p><b>员工备注</b>{record.memo}</p>}
                   </div>
                 </details>
-                <div className="row-actions"><RecordDetailsButton record={record} />{administrator && pending && <ReviewAssignment record={record} onSaved={load} />}</div>
+                <div className="row-actions"><RecordDetailsButton record={record} />{administrator && pending && <ReviewAssignment record={record} onSaved={load} />}{administrator && record.status === 3 && <VoidSalaryButton record={record} onSaved={load} />}</div>
+                {record.status === 5 && <p className="audit-memo"><b>作废原因：</b>{record.voidReason}</p>}
                 {pending ? <div className="review-actions">
                   <label><span>审核备注（驳回时必填）</span><textarea maxLength={1000} disabled={interactionLocked} value={notes[record.id] ?? ''} onChange={(event) => setNotes((current) => ({ ...current, [record.id]: event.target.value }))} rows={1} /></label>
                   <div><button type="button" className="secondary-button danger-button" disabled={interactionLocked} onClick={() => void review(item, 'reject')}>驳回</button><button type="button" className="primary-button" disabled={interactionLocked} onClick={() => void review(item, 'approve')}>{busyId === record.id ? '处理中…' : '审核通过'}</button></div>

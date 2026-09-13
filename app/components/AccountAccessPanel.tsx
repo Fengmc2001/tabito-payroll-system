@@ -27,7 +27,7 @@ function AccessEditor({user, users, onSaved, onEditingChange}: {user: ManagedUse
   useUnsavedChanges(dirty, busy);
   useEffect(() => { onEditingChange(dirty || busy); return () => onEditingChange(false); }, [dirty, busy, onEditingChange]);
   const reviewers = users.filter((u) => u.status === 'active' && u.role !== 'employee');
-  const targets = users.filter((u) => u.id !== user.id && (u.displayName + u.email).toLowerCase().includes(search.toLowerCase()));
+  const targets = users.filter((u) => (u.displayName + u.email).toLowerCase().includes(search.toLowerCase())).sort((a, b) => Number(b.id === user.id) - Number(a.id === user.id));
   async function save() {
     if (busy || !dirty) return;
     setBusy(true);
@@ -55,9 +55,9 @@ function AccessEditor({user, users, onSaved, onEditingChange}: {user: ManagedUse
     </div>
     {user.role !== 'admin' && <section className="access-card"><h3>可查看完整资料并审批工资的员工 <span className="muted-text">已选 {draft.subjectUserIds.length} 人</span></h3>
       <p className="muted-text">可查看所选员工的已申报工资、收款资料、证件和附件，并通过或驳回其全部待审工资，不受负责人或指定审核员限制。普通员工账号同样生效，并自动获得“工资审批”入口。</p>
-      <p className="muted-text">不含未提交草稿、修改资料、代报和转交审核。取消勾选并保存后撤销此授权；若仍是某条申报的指定审核员，可继续审批该条。</p>
+      <p className="muted-text">勾选本人可审批自己的工资；未勾选时，即使是指定审核员也不能自审。其他员工取消授权后，仅保留指定给该账号的审批权限。不含代报、转交或作废已通过工资。</p>
       <input aria-label="搜索授权员工" placeholder="搜索姓名或邮箱" value={search} onChange={(e) => setSearch(e.target.value)} />
-      <div className="access-targets">{targets.map((u) => <label className="access-check" key={u.id}><input type="checkbox" checked={draft.subjectUserIds.includes(u.id)} onChange={(e) => setDraft({...draft, subjectUserIds:e.target.checked ? [...draft.subjectUserIds,u.id] : draft.subjectUserIds.filter((id) => id !== u.id)})} /><span>{u.displayName}<small>{u.email}</small></span></label>)}</div>
+      <div className="access-targets">{targets.map((u) => <label className="access-check" key={u.id}><input type="checkbox" checked={draft.subjectUserIds.includes(u.id)} onChange={(e) => setDraft({...draft, subjectUserIds:e.target.checked ? [...draft.subjectUserIds,u.id] : draft.subjectUserIds.filter((id) => id !== u.id)})} /><span>{u.displayName}{u.id === user.id ? '（本人）' : ''}<small>{u.email}</small></span></label>)}</div>
       {draft.subjectUserIds.length > 0 && !draft.features.summary && !draft.features.employees && <p className="muted-text">查看完整收款资料和档案，还需开放“工资汇总”或“员工管理”；工资审批入口随授权自动开放。</p>}
       {draft.subjectUserIds.length === 0 && <p className="muted-text">未额外授权查看及审批其他员工的工资。</p>}
     </section>}

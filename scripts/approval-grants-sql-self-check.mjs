@@ -25,6 +25,11 @@ equal(can('grantee','assigned-line'),false,'forged/stale admin role is ignored')
 equal(can('owner','assigned-line'),false,'own profile visibility does not imply self approval');
 equal(can('assigned','assigned-line'),true,'designated reviewer allowed');
 equal(can('assigned','unassigned-line'),false,'unassigned wages are not public');
+equal(can('other','unrelated-line'),false,'assignment to self does not bypass self grant');
+db.exec("INSERT INTO payroll_access_grants VALUES ('other','other')");
+equal(can('other','unrelated-line'),true,'self grant allows self approval');
+db.exec("DELETE FROM payroll_access_grants WHERE viewer_user_id='other'");
+equal(can('other','unrelated-line'),false,'self grant revocation is immediate');
 db.exec("INSERT INTO payroll_access_grants VALUES ('grantee','owner')");
 equal(can('grantee','assigned-line'),true,'employee grant covers another designated reviewer');
 equal(can('grantee','unassigned-line'),true,'employee grant covers unassigned wages');
