@@ -27,6 +27,7 @@
     "self-check:proxy": "node scripts/proxy-payroll-self-check.mjs",
     "self-check:permissions-migration": "node scripts/permissions-migration-self-check.mjs",
     "self-check:permissions": "node --experimental-strip-types scripts/permissions-self-check.mjs",
+    "self-check:approval-grants": "node scripts/approval-grants-sql-self-check.mjs",
     "self-check:logic": "node scripts/payroll-logic-self-check.mjs",
     "self-check:timezone": "node --experimental-strip-types scripts/timezone-self-check.mjs",
     "self-check:audit-fixes": "node scripts/audit-fixes-self-check.mjs",

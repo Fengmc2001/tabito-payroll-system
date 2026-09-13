@@ -129,7 +129,7 @@ export function ReviewWorkspace({ administrator = false }: {administrator?: bool
         { method: 'PATCH', body: { decision, auditMemo, expectedUpdatedAt: item.record.updatedAt } },
       );
       setItems((current) => current.map((candidate) => candidate.record.id === item.record.id
-        ? { ...candidate, record: result.record }
+        ? { ...candidate, record: { ...candidate.record, ...result.record } }
         : candidate));
       setTone('success');
       setMessage(decision === 'approve'

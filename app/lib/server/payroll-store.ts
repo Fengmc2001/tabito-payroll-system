@@ -1,4 +1,4 @@
-import { accountAccess, featuresFromStored, fileAccessSql, fullAccessSql, recordAccessSql, reviewAccessSql, requireFeature, requireFullAccess, requirePayrollTarget, recordLifecycleStatements, sqlText } from './access-control';
+import { accountAccess, featuresFromStored, fileAccessSql, fullAccessSql, recordAccessSql, reviewAccessSql, requireReviewWorkspace, requireFeature, requireFullAccess, requirePayrollTarget, recordLifecycleStatements, sqlText } from './access-control';
 import { AccountAccess, RecordHistoryItem } from '../payroll';
 import { env } from 'cloudflare:workers';
 import { accountAuditQuery } from '../account-audit-query';
@@ -1231,8 +1231,8 @@ export async function listReviewSalaryRecords(
   actor: SessionActor,
   status?: SalaryStatus,
 ): Promise<ReviewSalaryItem[]> {
-  requireRole(actor, ['reviewer', 'admin']);
   const db = await database();
+  await requireReviewWorkspace(db, actor);
   const allowedStatuses: SalaryStatus[] = [2, 3, 4];
   if (status && !allowedStatuses.includes(status)) throw new ApiError(400, '审核状态筛选无效。');
   const query = status
@@ -1264,7 +1264,6 @@ export async function reviewSalaryRecord(
   auditMemo: string,
   expectedUpdatedAt?: string,
 ) {
-  requireRole(actor, ['reviewer', 'admin']);
   if (!['approve', 'reject'].includes(decision)) throw new ApiError(400, '审核动作无效。');
   const memo = cleanStringStrict(auditMemo, 1000, '审核备注');
   if (decision === 'reject' && !memo) throw new ApiError(400, '驳回时必须填写审核备注。');
@@ -1273,7 +1272,7 @@ export async function reviewSalaryRecord(
     .bind(id)
     .first<RecordRow>();
   if (!row) throw new ApiError(404, '未找到工资记录。');
-  if (!await db.prepare(`SELECT r.id FROM payroll_salary_records r WHERE r.id = ? AND ${reviewAccessSql(actor)}`).bind(id).first()) throw new ApiError(403, '该申报未分配给你审核。');
+  if (!await db.prepare(`SELECT r.id FROM payroll_salary_records r WHERE r.id = ? AND ${reviewAccessSql(actor)}`).bind(id).first()) throw new ApiError(403, '没有该员工的工资审批权限，或该申报未分配给你。');
   const existing = recordFromRow(row);
   if (existing.status !== 2) throw new ApiError(409, '只有待审核记录可以执行审核。');
   if (!expectedUpdatedAt) throw new ApiError(400, '缺少申报版本，请刷新后审核。');
@@ -1291,10 +1290,8 @@ export async function reviewSalaryRecord(
   const [result] = await db.batch([
     db.prepare(`UPDATE payroll_salary_records
       SET status = ?, data_json = ?, updated_at = ?
-      WHERE id = ? AND status = 2 AND updated_at = ? AND ${reviewAccessSql(actor, 'payroll_salary_records')}
-        AND EXISTS (SELECT 1 FROM payroll_users
-          WHERE id = ? AND status = 'active' AND role IN ('reviewer', 'admin'))`)
-      .bind(status, JSON.stringify(record), now, id, existing.updatedAt, actor.userId),
+      WHERE id = ? AND status = 2 AND updated_at = ? AND ${reviewAccessSql(actor, 'payroll_salary_records')}`)
+      .bind(status, JSON.stringify(record), now, id, existing.updatedAt),
     db.prepare(`INSERT INTO payroll_audit_logs
       (id, actor_user_id, action, target_type, target_id, detail_json, subject_user_id, business_month, created_at)
       SELECT ?, ?, ?, 'salary_record', ?, ?, ?, ?, ? WHERE changes() = 1`)
@@ -1302,7 +1299,7 @@ export async function reviewSalaryRecord(
         subjectUserId, businessMonth, now),
     ...recordLifecycleStatements(db, [id], auditId),
   ]);
-  if (!result.meta.changes) throw new ApiError(409, '该记录已被其他审核员处理，请刷新。');
+  if (!result.meta.changes) throw new ApiError(409, '申报状态或审批权限已变化，请刷新后重试。');
   return record;
 }
 

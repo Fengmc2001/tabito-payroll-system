@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
-import { createRecord } from '../app/lib/payroll.ts';
+import { createRecord, accountCanReview } from '../app/lib/payroll.ts';
 const base = process.env.PAYROLL_TEST_BASE_URL || 'http://127.0.0.1:3505';
 if (!['localhost','127.0.0.1','[::1]'].includes(new URL(base).hostname)) throw new Error('Permission fixtures run on localhost only.');
 const password = process.env.PAYROLL_TEST_ADMIN_PASSWORD || 'Permissions-Local-2026!';
@@ -42,7 +42,7 @@ async function upload(s,name) {
   return (await req('/api/uploads',s,'POST',form,201)).data.file.key;
 }
 async function register(name,role='employee') {
-  const email='permissions-'+unique+'-'+name+'@example.invalid';
+  const email='permissions-'+unique+'-'+randomUUID().slice(0,8)+'@example.invalid';
   const r=await req('/api/users',null,'POST',{email,passwordDigest:digest(password)},201);
   const s=await profile({account:r.data.account,cookie:r.cookie,email,password},name);
   if(role!=='employee')await manage(s,{role});
@@ -54,8 +54,8 @@ async function access(s,values) {
   const u=await managed(s);
   return (await req('/api/admin/users/'+u.id+'/access',admin,'PATCH',{...u.access,...values,expectedUpdatedAt:u.updatedAt})).data.user;
 }
-await req('/api/admin/settings',admin,'PATCH',{registrationOpen:true});
 await profile(admin,'权限管理员');
+await req('/api/admin/settings',admin,'PATCH',{registrationOpen:true});
 const r1=await register('审核甲','reviewer'),r2=await register('审核乙','reviewer');
 const a=await register('老师甲'),b=await register('老师乙'),viewer=await register('资料查看员');
 await manage(admin,{workManager:true});
@@ -126,14 +126,17 @@ ok(detail.salaryRecords.some(r=>r.id===commission.id)&&!detail.salaryRecords.som
 ok(!detail.files.some(f=>f.key===draftProof),'full profile does not expose draft-only files');
 await download(a.bank,viewer);await download(proofC,viewer);await download(draftProof,viewer,403);
 await req('/api/staff/employees/'+b.account.id,viewer,'GET',undefined,403);
-await req('/api/review/salary-records',viewer,'GET',undefined,403);
+ok((await req('/api/review/salary-records',viewer)).data.items.some(i=>i.record.id===commission.id),'ordinary grantee sees all submitted wages for granted employee');
+ok(!(await req('/api/review/salary-records',viewer)).data.items.some(i=>[draft.id,bRecord.id].includes(i.record.id)),'granted queue excludes drafts and other employees');
 await req('/api/staff/payroll/records',viewer,'POST',{targetUserId:a.account.id,record:teaching,submit:false},403);
 const grantOverview=(await req('/api/audit/overview?year='+month.slice(0,4)+'&month='+month,viewer)).data.overview;
 ok(!grantOverview.employees.some(u=>u.id===b.account.id),'audit employee list respects grant');
 await access(r1,{features:{summary:true,employees:true,audit:true},subjectUserIds:[a.account.id]});
 ok((await req('/api/staff/employees/'+a.account.id,r1)).data.employee.salaryRecords.some(r=>r.id===commission.id),'reviewer extra grant reveals complete submitted wages');
-await req('/api/review/salary-records/'+commission.id,r1,'PATCH',{decision:'approve'},403);
+await req('/api/review/salary-records/'+commission.id,r1,'PATCH',{decision:'approve'},400);
 await access(viewer,{subjectUserIds:[]});
+await req('/api/review/salary-records',viewer,'GET',undefined,403);
+await req('/api/review/salary-records/'+commission.id,viewer,'PATCH',{decision:'approve'},403);
 await req('/api/staff/employees/'+a.account.id,viewer,'GET',undefined,403);await download(proofA,viewer,403);
 ok(!(await req('/api/staff/transfer-sheet?month='+month+'&scope=granted',viewer)).data.rows.some(r=>r.user.id===a.account.id),'revocation blocks summary and export data without relogin');
 await access(r1,{subjectUserIds:[],features:{summary:true,employees:false,audit:false}});
@@ -217,6 +220,36 @@ await access(viewer,{features:{summary:false,employees:false,audit:false}});
 await req('/api/staff/transfer-sheet?month='+month,viewer,'GET',undefined,403);
 await req('/api/staff/employees',viewer,'GET',undefined,403);
 await req('/api/audit/overview',viewer,'GET',undefined,403);
+// Complete-profile grants also authorize decisions, independently of role/page flags.
+await access(b,{reviewerUserId:null});
+const grantedApprove=await create(b,b,'授权员工审批未分配工资',123);
+const grantedReject=await create(b,admin,'授权审核员审批其他负责人工资',456);
+const revokedPending=await create(b,b,'撤销授权后不得审批',789);
+await req('/api/salary-records/apply/'+b.account.id,b,'POST',{month});
+const privateDraft=await create(b,b,'授权仍不含草稿',100);
+await access(viewer,{subjectUserIds:[b.account.id],features:{summary:false,employees:false,audit:false}});
+const viewerAccount=(await req('/api/users',viewer)).data.account;
+ok(viewerAccount.role==='employee'&&accountCanReview(viewerAccount),'ordinary grant opens review navigation without promotion or page flags');
+ok(!(await req('/api/review/salary-records',viewer)).data.items.some(i=>i.record.id===privateDraft.id),'private drafts stay out of grant review queue');
+await req('/api/review/salary-records/'+privateDraft.id,viewer,'PATCH',{decision:'approve'},409);
+await req('/api/review/salary-records/'+grantedApprove.id,viewer,'PATCH',{decision:'approve',expectedUpdatedAt:'stale'},409);
+await req('/api/review/salary-records/'+grantedApprove.id,viewer,'PATCH',{decision:'approve'});
+const grantedHistory=(await req('/api/salary-records/'+grantedApprove.id+'/history',admin)).data;
+ok(grantedHistory.record.status===3&&grantedHistory.history.some(h=>h.action==='salary.approve'&&h.actorName.includes('资料查看员')),'employee grant decision persists with real actor history');
+await req('/api/review/salary-records/'+grantedApprove.id,viewer,'PATCH',{decision:'reject',auditMemo:'duplicate'},409);
+await req('/api/review/salary-records/'+grantedReject.id,viewer,'PATCH',{decision:'reject',auditMemo:''},400);
+await req('/api/review/salary-records/'+revokedPending.id+'/assign',viewer,'PATCH',{reviewerUserId:r1.account.id},403);
+await req('/api/staff/payroll/records',viewer,'POST',{targetUserId:b.account.id,record:revokedPending,submit:false},403);
+await access(r2,{subjectUserIds:[b.account.id]});
+const reloginR2=await req('/api/users/login',null,'POST',{email:r2.email,passwordDigest:digest(password)});r2.cookie=reloginR2.cookie;
+await req('/api/review/salary-records/'+grantedReject.id,r2,'PATCH',{decision:'reject',auditMemo:'授权审批：请核对内容'});
+await access(viewer,{subjectUserIds:[]});
+await req('/api/review/salary-records/'+revokedPending.id,viewer,'PATCH',{decision:'approve'},403);
+ok(!accountCanReview((await req('/api/users',viewer)).data.account),'revocation removes ordinary employee review navigation');
+await req('/api/review/salary-records',viewer,'GET',undefined,403);
+await access(r2,{subjectUserIds:[]});
+await req('/api/review/salary-records/'+revokedPending.id,r2,'PATCH',{decision:'approve'},403);
+ok(accountCanReview({role:'reviewer'})&&accountCanReview({role:'admin'})&&!accountCanReview({role:'employee'}),'role-only navigation defaults unchanged');
 const creds=[admin,r1,r2,a,b,viewer].map(s=>({id:s.account.id,name:s.account.profile.lastNameCn+s.account.profile.firstNameCn,email:s.email,password:s.password}));
 if(process.env.PAYROLL_TEST_SAVE_ACCOUNTS==='1') await writeFile('.local/permissions-qa-accounts.json',JSON.stringify({base,accounts:creds},null,2),{mode:0o600});
 console.log(JSON.stringify({result:'PASS',checks,base,accountCount:creds.length,month}));

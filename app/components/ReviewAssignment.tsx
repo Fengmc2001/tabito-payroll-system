@@ -29,7 +29,7 @@ function AssignmentDialog({record,onClose,onSaved}:{record:SalaryRecord;onClose:
       {selected&&!users.some(u=>u.id===selected)&&<option value={selected}>原审核员已不可用，请重新选择</option>}
       {users.map(u=><option key={u.id} value={u.id}>{u.displayName} · {u.email}</option>)}
     </select></label>
-    <p>只转交这条申报。原审核员不再负责审核；如另有完整资料授权，仍可查看。已有审批记录保留。</p>
+    <p>只转交这条申报。原审核员不再作为指定审核员；如另有该员工的完整资料与工资审批授权，仍可查看和审批。已有审批记录保留。</p>
     <StatusMessage message={message} eventId={revision} tone="error"/>
     <footer><button type="button" className="secondary-button" disabled={busy} onClick={onClose}>取消</button><button type="button" className="primary-button" disabled={busy||loading} onClick={()=>void save()}>{busy?'保存中…':'确认分配'}</button></footer>
   </section></div>;

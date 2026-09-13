@@ -28,6 +28,9 @@ export function defaultFeatures(role: AccountRole): AccessFeatures {
 export function accountFeatures(account: { role: AccountRole; access?: AccountAccess }): AccessFeatures {
   return account.role === 'admin' ? defaultFeatures('admin') : account.access?.features ?? defaultFeatures(account.role);
 }
+export function accountCanReview(account: { role: AccountRole; access?: AccountAccess }): boolean {
+  return account.role === 'admin' || account.role === 'reviewer' || Boolean(account.access?.subjectUserIds.length);
+}
 export type RecordHistoryItem = { id: number | string; actorName: string; action: string; createdAt: string; record: SalaryRecord | null; auditMemo?: string };
 export type AccountStatus = 'active' | 'disabled';
 export type CurrencyCode = 'JPY' | 'CNY';

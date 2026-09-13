@@ -32,6 +32,7 @@ import { ApiClientError, apiRequest } from './lib/api-client';
 import {
   APP_TITLE,
   accountFeatures,
+  accountCanReview,
   BOOTSTRAP_ADMIN_EMAIL,
   AppRoute,
   Profile,
@@ -141,7 +142,7 @@ export default function HomePage() {
       navigate('/profile/setting');
       return;
     }
-    if ((isDelegatedPayrollRoute(route) && activeAccount.role !== 'admin') || (route === '/review/salary' && activeAccount.role === 'employee')) {
+    if ((isDelegatedPayrollRoute(route) && activeAccount.role !== 'admin') || (route === '/review/salary' && !accountCanReview(activeAccount))) {
       navigate('/');
       return;
     }
@@ -332,7 +333,7 @@ export default function HomePage() {
     />
   ) : route === '/pay/history' ? (
     <SalaryHistory records={activeAccount.salaryRecords} />
-  ) : route === '/review/salary' && activeAccount.role !== 'employee' ? (
+  ) : route === '/review/salary' && accountCanReview(activeAccount) ? (
     <ReviewWorkspace administrator={activeAccount.role === 'admin'} />
   ) : route === '/review/summary' && accountFeatures(activeAccount).summary ? (
     <TransferSheetWorkspace role={activeAccount.role} />
@@ -472,7 +473,7 @@ function AppShell({
   const onboardingReady = profileBasicsAreReady(account.profile);
   const profileReady = profileIsReady(account.profile);
   const missingRequirements = profileMissingRequirements(account.profile);
-  const privileged = account.role === 'reviewer' || account.role === 'admin';
+  const privileged = accountCanReview(account);
   type NavItem = {
     route: AppRoute;
     label: string;
@@ -578,8 +579,8 @@ function LandingPage({ account, onNavigate }: { account: StoredAccount; onNaviga
     { number: '02', label: '工资申报', description: '申报并查看审核状态', route: '/pay/salary', icon: ClipboardList },
     { number: '03', label: '往期工资一览', description: '查看已通过工资', route: '/pay/history', icon: History },
   ];
-  if (account.role === 'reviewer' || account.role === 'admin') {
-    actions.push({ number: '04', label: '工资审核', description: '审批工资并查看工资汇总', route: '/review/salary', icon: BadgeCheck });
+  if (accountCanReview(account)) {
+    actions.push({ number: '04', label: '工资审核', description: '查看并处理工资申报', route: '/review/salary', icon: BadgeCheck });
   }
   if (account.role === 'admin') {
     actions.push({ number: '05', label: '账号与权限', description: '管理账号、权限与部门', route: '/admin/users', icon: ShieldCheck });

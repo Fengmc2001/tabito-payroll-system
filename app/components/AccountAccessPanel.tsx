@@ -53,12 +53,13 @@ function AccessEditor({user, users, onSaved, onEditingChange}: {user: ManagedUse
         </select><small>仅影响后续提交；已有待审记录请在工资审批中转交。</small></label> : <p className="muted-text">该账号不是工作负责人，无需设置审核员。</p>}
       </section>
     </div>
-    {user.role !== 'admin' && <section className="access-card"><h3>可查看完整资料的员工 <span className="muted-text">已选 {draft.subjectUserIds.length} 人</span></h3>
-      <p className="muted-text">包含已申报工资、收款资料、证件和附件；不含未提交草稿。不允许修改、代报或审批。</p>
+    {user.role !== 'admin' && <section className="access-card"><h3>可查看完整资料并审批工资的员工 <span className="muted-text">已选 {draft.subjectUserIds.length} 人</span></h3>
+      <p className="muted-text">可查看所选员工的已申报工资、收款资料、证件和附件，并通过或驳回其全部待审工资，不受负责人或指定审核员限制。普通员工账号同样生效，并自动获得“工资审批”入口。</p>
+      <p className="muted-text">不含未提交草稿、修改资料、代报和转交审核。取消勾选并保存后撤销此授权；若仍是某条申报的指定审核员，可继续审批该条。</p>
       <input aria-label="搜索授权员工" placeholder="搜索姓名或邮箱" value={search} onChange={(e) => setSearch(e.target.value)} />
       <div className="access-targets">{targets.map((u) => <label className="access-check" key={u.id}><input type="checkbox" checked={draft.subjectUserIds.includes(u.id)} onChange={(e) => setDraft({...draft, subjectUserIds:e.target.checked ? [...draft.subjectUserIds,u.id] : draft.subjectUserIds.filter((id) => id !== u.id)})} /><span>{u.displayName}<small>{u.email}</small></span></label>)}</div>
-      {draft.subjectUserIds.length > 0 && !draft.features.summary && !draft.features.employees && <p className="muted-text">尚未开放查看入口，请至少勾选“工资汇总”或“员工管理”。</p>}
-      {draft.subjectUserIds.length === 0 && <p className="muted-text">未额外授权查看他人完整资料。</p>}
+      {draft.subjectUserIds.length > 0 && !draft.features.summary && !draft.features.employees && <p className="muted-text">查看完整收款资料和档案，还需开放“工资汇总”或“员工管理”；工资审批入口随授权自动开放。</p>}
+      {draft.subjectUserIds.length === 0 && <p className="muted-text">未额外授权查看及审批其他员工的工资。</p>}
     </section>}
     <StatusMessage message={message} tone={tone} eventId={revision} />
     <div className="heading-actions"><button type="button" className="secondary-button" disabled={!dirty} onClick={() => setDraft({...initial, reviewerUserId:user.workManager ? initial.reviewerUserId : null})}>取消更改</button><button type="button" className="primary-button" disabled={!dirty || busy} onClick={() => void save()}>{busy ? '保存中…' : '保存查看与审核配置'}</button></div>

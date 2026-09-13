@@ -26,6 +26,7 @@ jobs:
       - run: npm run self-check:deployment
       - run: npm run self-check:delegated-ui
       - run: npm run self-check:permissions-migration
+      - run: npm run self-check:approval-grants
       - run: npm audit --omit=dev
       - name: Prepare disposable local D1
         env:
