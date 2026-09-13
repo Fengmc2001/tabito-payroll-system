@@ -214,6 +214,7 @@ export type RecurringPayrollRule = {
 };
 
 export type ReviewSalaryItem = {
+  submittedAt?: string | null;
   user: {
     id: string;
     email: string;

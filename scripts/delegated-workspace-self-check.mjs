@@ -5,6 +5,7 @@ const source = await readFile(new URL('../app/components/DelegatedSalaryWorkspac
 const pageSource = await readFile(new URL('../app/page.tsx', import.meta.url), 'utf8');
 const payrollSource = await readFile(new URL('../app/components/PayrollWorkspace.tsx', import.meta.url), 'utf8');
 const reviewSource = await readFile(new URL('../app/components/ReviewWorkspace.tsx', import.meta.url), 'utf8');
+const tableSource = await readFile(new URL('../app/components/ReviewTable.tsx', import.meta.url), 'utf8');
 const employeeSource = await readFile(new URL('../app/components/EmployeeWorkspace.tsx', import.meta.url), 'utf8');
 const transferSource = await readFile(new URL('../app/components/TransferSheetWorkspace.tsx', import.meta.url), 'utf8');
 const styleSource = await readFile(new URL('../app/globals.css', import.meta.url), 'utf8');
@@ -97,13 +98,10 @@ check(
   '审核刷新使用请求版本并在操作期间锁定筛选与审核动作',
 );
 check(
-  reviewSource.includes('review-card__headline')
-    && reviewSource.includes('review-card__work-content')
-    && reviewSource.includes('review-card__details')
-    && styleSource.includes('.review-card__amount { color: var(--xly-navy); font-size: 20px;')
-    && styleSource.includes('grid-template-columns: repeat(4, minmax(0, 1fr));')
-    && styleSource.includes('.review-actions textarea { min-height: 42px;'),
-  '审核卡片突出金额并用紧凑主信息与可展开申报信息缩短高度',
+  reviewSource.includes('<ReviewTable') && tableSource.includes('review-table-amount')
+    && tableSource.includes('aria-expanded={open}') && tableSource.includes('review-inline-panel')
+    && styleSource.includes('position: sticky; right: 0;') && styleSource.includes('overflow-x: auto;'),
+  '审核表格突出金额，保留逐行详情与固定操作列',
 );
 
 check(
@@ -116,7 +114,7 @@ check(
   '导出重新取数并防止切换月份或页面后使用旧响应',
 );
 check(
-  reviewSource.includes('RecordDetailsButton') && reviewSource.includes('ReviewAssignment')
+  tableSource.includes('RecordDetailsButton') && tableSource.includes('ReviewAssignment')
     && reviewSource.includes('expectedUpdatedAt: item.record.updatedAt'),
   '审批记录支持详情、转交并携带记录版本',
 );

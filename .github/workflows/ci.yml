@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, ui/review-table-preview]
   pull_request:
 
 permissions:
@@ -25,6 +25,7 @@ jobs:
       - run: npm run self-check:audit-fixes
       - run: npm run self-check:deployment
       - run: npm run self-check:delegated-ui
+      - run: npm run self-check:review-table
       - run: npm run self-check:permissions-migration
       - run: npm run self-check:approval-grants
       - run: npm audit --omit=dev
@@ -67,4 +68,5 @@ jobs:
           PAYROLL_TEST_BASE_URL=http://localhost:3200 PAYROLL_TEST_ADMIN_PASSWORD='CI-Only-Admin-2026!' PAYROLL_TEST_SAVE_ACCOUNTS=1 npm run self-check:permissions
           PAYROLL_TEST_BASE_URL=http://localhost:3200 npm run self-check:void-travel
           PAYROLL_TEST_BASE_URL=http://localhost:3200 npm run self-check:reviewer-routing
+          PAYROLL_TEST_BASE_URL=http://localhost:3200 npm run self-check:review-table-api
           curl --fail --silent --show-error http://localhost:3200/cdn-cgi/local/scheduled > /dev/null

@@ -1298,19 +1298,22 @@ export async function listReviewSalaryRecords(
   const allowedStatuses: SalaryStatus[] = [2, 3, 4];
   if (status === 5) { requireRole(actor, ['admin']); allowedStatuses.push(5); }
   if (status && !allowedStatuses.includes(status)) throw new ApiError(400, '审核状态筛选无效。');
+  const submissionTime = `(SELECT MAX(h.created_at) FROM payroll_record_history h WHERE h.record_id = r.id
+    AND h.status = 2 AND h.action IN ('salary.submit','salary.proxy_submit','salary.proxy_batch_submit','salary.rule_generate')) AS submitted_at`;
   const query = status
-    ? `SELECT r.id, r.user_id, r.status, r.currency, r.reviewer_user_id, r.data_json, u.email, u.profile_json
+    ? `SELECT r.id, r.user_id, r.status, r.currency, r.reviewer_user_id, r.data_json, u.email, u.profile_json, ${submissionTime}
        FROM payroll_salary_records r JOIN payroll_users u ON u.id = r.user_id
        WHERE r.status = ? AND ${reviewAccessSql(actor)} ORDER BY r.work_date DESC, r.updated_at DESC`
-    : `SELECT r.id, r.user_id, r.status, r.currency, r.reviewer_user_id, r.data_json, u.email, u.profile_json
+    : `SELECT r.id, r.user_id, r.status, r.currency, r.reviewer_user_id, r.data_json, u.email, u.profile_json, ${submissionTime}
        FROM payroll_salary_records r JOIN payroll_users u ON u.id = r.user_id
        WHERE r.status IN (2, 3, 4) AND ${reviewAccessSql(actor)} ORDER BY r.status ASC, r.work_date DESC, r.updated_at DESC`;
   const statement = db.prepare(query);
   const result = status
-    ? await statement.bind(status).all<ReviewRow>()
-    : await statement.all<ReviewRow>();
+    ? await statement.bind(status).all<ReviewRow & {submitted_at: string | null}>()
+    : await statement.all<ReviewRow & {submitted_at: string | null}>();
   const records = await withReviewerNames(db, result.results.map(recordFromRow));
   return result.results.map((row, index) => ({
+    submittedAt: row.submitted_at,
     user: {
       id: row.user_id,
       email: row.email,

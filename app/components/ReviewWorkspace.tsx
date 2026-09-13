@@ -1,26 +1,20 @@
 'use client';
 
-import { RecordDetailsButton } from './RecordDetailsButton';
-import { VoidSalaryButton } from './VoidSalaryButton';
-import { ReviewAssignment } from './ReviewAssignment';
-import { appPath } from '../lib/app-path';
+import { ReviewTable } from './ReviewTable';
+import { ReviewFailure, ReviewRejectDialog } from './ReviewRejectDialog';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useFeedback } from './interaction-guards';
+import { useFeedback, useUnsavedChanges } from './interaction-guards';
 import { ApiClientError, apiRequest } from '../lib/api-client';
 import {
   AuditLogItem,
   CurrencyAmounts,
   ReviewSalaryItem,
   SalaryStatus,
-  STATUS,
   currentMonth,
   emptyCurrencyAmounts,
-  formatHours,
-  getApplyTypeLabel,
-  getDepartmentLabel,
 } from '../lib/payroll';
-import { AuditTrailPanel, CurrencyAmountsView, Money } from './payroll-ui';
+import { AuditTrailPanel, CurrencyAmountsView } from './payroll-ui';
 import { StatusMessage } from './form-controls';
 
 type Filter = 'all' | 'pending' | 'approved' | 'rejected' | 'voided';
@@ -33,14 +27,16 @@ export function ReviewWorkspace({ administrator = false }: {administrator?: bool
   const [needsAssignment, setNeedsAssignment] = useState(false);
   const [month, setMonth] = useState(currentMonth);
   const [selectedUserId, setSelectedUserId] = useState('');
-  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [rejectItem, setRejectItem] = useState<ReviewSalaryItem|null>(null);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState('');
   const [message, setMessage, feedbackRevision] = useFeedback();
   const [tone, setTone] = useState<'success' | 'error' | 'info'>('info');
   const requestRevision = useRef(0);
+  const submitting = useRef(false);
+  useUnsavedChanges(false, Boolean(busyId));
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (clearMessage = true) => {
     const revision = requestRevision.current + 1;
     requestRevision.current = revision;
     setLoading(true);
@@ -53,14 +49,16 @@ export function ReviewWorkspace({ administrator = false }: {administrator?: bool
         setItems(reviewResult.items);
         setLogs(logResult.logs);
         setSelectedUserId((current) => current && !reviewResult.items.some((item) => item.user.id === current) ? '' : current);
-        setMessage('');
+        if (clearMessage) setMessage('');
       }
+      return true;
     } catch (error) {
       if (requestRevision.current === revision) {
         setItems([]); setLogs([]);
         setTone('error');
         setMessage(errorText(error));
       }
+      return false;
     } finally {
       if (requestRevision.current === revision) setLoading(false);
     }
@@ -117,13 +115,12 @@ export function ReviewWorkspace({ administrator = false }: {administrator?: bool
   }), [accountMonthItems]);
   const interactionLocked = loading || Boolean(busyId);
 
-  const review = async (item: ReviewSalaryItem, decision: 'approve' | 'reject') => {
-    const auditMemo = notes[item.record.id]?.trim() ?? '';
+  const review = async (item: ReviewSalaryItem, decision: 'approve' | 'reject', auditMemo = ''): Promise<ReviewFailure|null> => {
+    if (submitting.current || loading || item.record.status !== 2) return {message:'正在处理，请稍候。',stale:false};
     if (decision === 'reject' && !auditMemo) {
-      setTone('error');
-      setMessage('驳回时必须填写审核备注。');
-      return;
+      return {message:'请填写驳回理由。',stale:false};
     }
+    submitting.current = true;
     setBusyId(item.record.id);
     try {
       const result = await apiRequest<{ record: ReviewSalaryItem['record'] }>(
@@ -133,22 +130,19 @@ export function ReviewWorkspace({ administrator = false }: {administrator?: bool
       setItems((current) => current.map((candidate) => candidate.record.id === item.record.id
         ? { ...candidate, record: { ...candidate.record, ...result.record } }
         : candidate));
-      setTone('success');
-      setMessage(decision === 'approve'
-        ? '工资已通过。'
-        : '工资已驳回。');
-      setNotes((current) => {
-        const next = { ...current };
-        delete next[item.record.id];
-        return next;
-      });
-      void apiRequest<{ logs: AuditLogItem[] }>('/api/audit/recent')
-        .then((recent) => setLogs(recent.logs))
-        .catch(() => undefined);
+      const refreshed = await load(false);
+      setTone(refreshed ? 'success' : 'info');
+      setMessage(refreshed ? (decision === 'approve' ? '工资已通过。' : '工资已驳回。') : '审批已保存，但列表刷新失败，请点击刷新。');
+      return null;
     } catch (error) {
+      const stale = error instanceof ApiClientError && [403,404,409].includes(error.status);
+      if (stale) await load(false);
+      const message = stale ? `${errorText(error)} 已重新读取列表，请关闭弹窗后核对最新记录。` : errorText(error);
       setTone('error');
-      setMessage(errorText(error));
+      setMessage(message);
+      return {message,stale};
     } finally {
+      submitting.current = false;
       setBusyId('');
     }
   };
@@ -197,56 +191,13 @@ export function ReviewWorkspace({ administrator = false }: {administrator?: bool
       {administrator && <button type="button" className="secondary-button archive-toggle" disabled={interactionLocked} onClick={() => {setNeedsAssignment(false); setFilter(archiveMode ? 'all' : 'voided');}}>{archiveMode ? '返回正常申报' : '查看已作废记录'}</button>}
       {archiveMode && <h2>已作废记录 · {visibleItems.length} 条</h2>}
 
-      {loading ? <div className="empty-state">正在加载审核队列…</div> : visibleItems.length === 0 ? (
+      {loading && items.length === 0 ? <div className="empty-state">正在加载审核队列…</div> : visibleItems.length === 0 ? (
         <div className="empty-state">{selectedUserId ? '该账号在当前月份与状态下没有工资记录。' : '当前月份与状态下没有工资记录。'}</div>
       ) : (
-        <div className="review-list">
-          {visibleItems.map((item) => {
-            const record = item.record;
-            const status = STATUS[record.status as SalaryStatus];
-            const pending = record.status === 2;
-            return (
-              <article className={`review-card review-card--${status.tone}`} key={record.id}>
-                <header>
-                  <div className="review-card__identity">
-                    <div><strong>{item.user.displayName}</strong>{duplicateEmployeeNames.has(item.user.displayName) && <small>{item.user.email}</small>}</div>
-                    <time dateTime={record.workDate}>{record.workDate}</time>
-                  </div>
-                  <div className="review-card__headline">
-                    <span className="review-card__amount"><Money amount={record.finalSalary} currency={record.currency} /></span>
-                    <span className={`status-badge status-badge--${status.tone}`}>{status.label}</span>
-                  </div>
-                </header>
-                <dl>
-                  <div><dt>所属部门</dt><dd>{getDepartmentLabel(record.departmentKey, record.departmentLabel)}</dd></div>
-                  <div><dt>计费方式</dt><dd>{getApplyTypeLabel(record.applyType)}</dd></div>
-                  <div><dt>劳动 / 休息</dt><dd>{formatHours(record.workHours)} / {formatHours(record.restHours)} 小时</dd></div>
-                  <div><dt>负责人</dt><dd>{record.checkUser}</dd></div>
-                  <div><dt>指定审核员</dt><dd>{record.reviewerName || '未指定审核员，由管理员处理'}{record.reviewerUserId && record.reviewerAvailable === false ? '（权限失效，由管理员处理）' : ''}</dd></div>
-                </dl>
-                {record.workContent && <p className="review-card__work-content"><b>工作内容</b><span>{record.workContent}</span></p>}
-                {record.attachments.length > 0 && <div className="attachment-links"><b>工资附件</b>{record.attachments.map((key, index) => (
-                  <a key={key} href={appPath(`/api/files?key=${encodeURIComponent(key)}`)} target="_blank" rel="noreferrer">附件 {index + 1}</a>
-                ))}</div>}
-                <details className="review-card__details">
-                  <summary>申报信息 · {salarySourceLabel(record.source)}</summary>
-                  <div>
-                    <span><b>创建人</b>{record.createdByName || item.user.displayName}</span>
-                    <span><b>提交人</b>{record.submittedByName || item.user.displayName}</span>
-                    {record.memo && <p><b>员工备注</b>{record.memo}</p>}
-                  </div>
-                </details>
-                <div className="row-actions"><RecordDetailsButton record={record} />{administrator && pending && <ReviewAssignment record={record} onSaved={load} />}{administrator && record.status === 3 && <VoidSalaryButton record={record} onSaved={load} />}</div>
-                {record.status === 5 && <p className="audit-memo"><b>作废原因：</b>{record.voidReason}</p>}
-                {pending ? <div className="review-actions">
-                  <label><span>审核备注（驳回时必填）</span><textarea maxLength={1000} disabled={interactionLocked} value={notes[record.id] ?? ''} onChange={(event) => setNotes((current) => ({ ...current, [record.id]: event.target.value }))} rows={1} /></label>
-                  <div><button type="button" className="secondary-button danger-button" disabled={interactionLocked} onClick={() => void review(item, 'reject')}>驳回</button><button type="button" className="primary-button" disabled={interactionLocked} onClick={() => void review(item, 'approve')}>{busyId === record.id ? '处理中…' : '审核通过'}</button></div>
-                </div> : record.auditMemo ? <p className="audit-memo"><b>审核备注：</b>{record.auditMemo}</p> : null}
-              </article>
-            );
-          })}
-        </div>
+        <ReviewTable key={`${selectedUserId}:${month}:${filter}:${needsAssignment}`} items={visibleItems} administrator={administrator} locked={interactionLocked} busyId={busyId} onApprove={item=>{void review(item,'approve');}} onReject={setRejectItem} onRefresh={async()=>{await load();}}/>
       )}
+
+      {rejectItem && <ReviewRejectDialog item={rejectItem} onClose={()=>setRejectItem(null)} onConfirm={reason=>review(rejectItem,'reject',reason)}/>}
 
       <AuditTrailPanel logs={logs} />
     </section>
@@ -270,14 +221,4 @@ function summarize(items: ReviewSalaryItem[], status: SalaryStatus) {
 
 function errorText(error: unknown) {
   return error instanceof ApiClientError ? error.message : error instanceof Error ? error.message : '请求失败。';
-}
-
-function salarySourceLabel(source: ReviewSalaryItem['record']['source']) {
-  return ({
-    self: '本人申报',
-    'proxy-single': '他人单条代报',
-    'proxy-batch': '他人批量代报',
-    recurring: '自动规律',
-    'gray-seed': '测试数据',
-  })[source] ?? '本人申报';
 }

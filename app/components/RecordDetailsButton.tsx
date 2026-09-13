@@ -6,9 +6,9 @@ import { appPath } from '../lib/app-path';
 import { Money } from './payroll-ui';
 import { useModalFocus } from './interaction-guards';
 
-export function RecordDetailsButton({record}: {record: SalaryRecord}) {
+export function RecordDetailsButton({record, label = '详情与审批记录'}: {record: SalaryRecord; label?: string}) {
   const [open, setOpen] = useState(false);
-  return <><button type="button" onClick={() => setOpen(true)}>详情与审批记录</button>{open && <RecordDetails id={record.id} onClose={() => setOpen(false)} />}</>;
+  return <><button type="button" onClick={() => setOpen(true)}>{label}</button>{open && <RecordDetails id={record.id} onClose={() => setOpen(false)} />}</>;
 }
 function RecordDetails({id, onClose}: {id: string; onClose: () => void}) {
   const [result, setResult] = useState<{record: SalaryRecord; history: RecordHistoryItem[]} | null>(null);
@@ -21,15 +21,20 @@ function RecordDetails({id, onClose}: {id: string; onClose: () => void}) {
     <HistoryLoader id={id} onResult={setResult} onError={setMessage} onStart={setStarted} />
     <div className="record-detail-body">
     {message ? <p role="alert">{message}</p> : !result ? <p>{started ? '正在加载…' : '正在检查查看权限…'}</p> : <>
-      <RecordContent record={result.record} />
-      <h3>提交与审批记录</h3>
-      <div className="record-history-list">{result.history.length ? result.history.map((h) => <article className="record-history-entry" key={h.id}>
-        <strong>{historyAction(h.action)} · {h.actorName}</strong><p>{formatJapanDateTime(h.createdAt)}</p>
-        {h.record ? <details><summary>查看当时的申报内容</summary><RecordContent record={h.record} /></details> : <p>{h.auditMemo && <span>审核备注：{h.auditMemo}<br /></span>}旧版操作记录未保存当时的明细快照。</p>}
-      </article>) : <p>这条旧申报尚无历史快照，现有审批结果见上方。</p>}</div>
+      <RecordHistoryContent result={result} />
     </>}
     </div>
   </section></div>;
+}
+export function RecordHistoryContent({result}: {result:{record:SalaryRecord;history:RecordHistoryItem[]}}) {
+  return <><RecordContent record={result.record} />
+      <h3>提交与审批记录</h3>
+      <div className="record-history-list">{result.history.length ? result.history.map((h) => <article className="record-history-entry" key={h.id}>
+        <strong>{historyAction(h.action)} · {h.actorName}</strong><p>{formatJapanDateTime(h.createdAt)}</p>
+        {(h.record?.auditMemo || h.auditMemo) && <p>审核备注：{h.record?.auditMemo || h.auditMemo}</p>}
+        {h.record ? <details><summary>查看当时的申报内容</summary><RecordContent record={h.record} /></details> : <p>旧版操作记录未保存当时的明细快照。</p>}
+      </article>) : <p>这条旧申报尚无历史快照，现有审批结果见上方。</p>}</div>
+    </>;
 }
 import { useEffect } from 'react';
 function HistoryLoader({id,onResult,onError,onStart}: {id:string;onResult:(value:{record:SalaryRecord;history:RecordHistoryItem[]})=>void;onError:(value:string)=>void;onStart:(value:boolean)=>void}) {
@@ -52,6 +57,8 @@ function RecordContent({record:r}: {record: SalaryRecord}) {
       <div><dt>计薪 / 休息</dt><dd>{formatHours(r.workHours)} / {formatHours(r.restHours)} 小时</dd></div>
       <div><dt>交通费</dt><dd><Money amount={r.travelFee} currency={r.currency} /></dd></div>
       <div><dt>交通区间</dt><dd>{[r.travelStart,r.travelEnd].filter(Boolean).join(' → ') || '—'}</dd></div>
+      <div><dt>创建人</dt><dd>{r.createdByName || '—'}</dd></div>
+      <div><dt>提交人</dt><dd>{r.submittedByName || '—'}</dd></div>
     </dl>
     <p><b>工作内容：</b>{r.workContent || '—'}</p><p><b>备注：</b>{r.memo || '—'}</p>
     {r.auditMemo && <p><b>审核备注：</b>{r.auditMemo}</p>}
