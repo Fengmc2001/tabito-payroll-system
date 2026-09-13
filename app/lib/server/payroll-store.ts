@@ -520,12 +520,17 @@ export async function getTravelDefaults(actor: SessionActor, userId: string, cur
   const currency = sanitizeCurrency(currencyInput);
   const db = await database();
   const row = await db.prepare(`SELECT data_json FROM (
-      SELECT h.data_json, h.created_at AS submitted_at, h.id AS sequence
+      SELECT h.data_json, r.currency, h.created_at AS submitted_at, h.id AS sequence
         FROM payroll_record_history h JOIN payroll_salary_records r ON r.id = h.record_id
-        WHERE r.user_id = ? AND r.status != 5 AND h.status IN (2,3,4)
+        WHERE r.user_id = ? AND r.status != 5 AND h.status = 2
+          AND h.action IN ('salary.submit','salary.proxy_submit','salary.proxy_batch_submit','salary.rule_generate')
       UNION ALL
-      SELECT data_json, updated_at, 0 FROM payroll_salary_records WHERE user_id = ? AND status IN (2,3,4)
-    ) WHERE json_extract(data_json, '$.currency') = ? AND json_extract(data_json, '$.travelFee') > 0
+      SELECT data_json, currency, created_at, 0 FROM payroll_salary_records r WHERE user_id = ? AND status IN (2,3,4)
+        AND NOT EXISTS (SELECT 1 FROM payroll_record_history h WHERE h.record_id = r.id AND h.status = 2
+          AND h.action IN ('salary.submit','salary.proxy_submit','salary.proxy_batch_submit','salary.rule_generate'))
+    ) WHERE COALESCE(json_extract(data_json, '$.currency'), currency, 'JPY') = ?
+      AND (json_extract(data_json, '$.includeTravel') = 1 OR
+        (json_type(data_json, '$.includeTravel') IS NULL AND json_extract(data_json, '$.travelFee') > 0))
       AND EXISTS (SELECT 1 FROM payroll_users a WHERE a.id = ? AND a.status = 'active' AND (a.id = ? OR a.role = 'admin'))
     ORDER BY submitted_at DESC, sequence DESC LIMIT 1`)
     .bind(userId, userId, currency, actor.userId, userId).first<{data_json: string}>();
@@ -714,7 +719,7 @@ export async function applySalaryRecords(userId: string, requestedMonth?: string
   if (Number(mutation.meta.changes ?? 0) !== drafts.length) {
     throw new ApiError(409, '工资记录已经发生变化，请刷新后重新提交。');
   }
-  return drafts;
+  return readSubmittedRecords(db, recordIds);
 }
 
 export async function listProxyPayrollUsers(actor: SessionActor): Promise<ManagedUser[]> {
@@ -825,7 +830,7 @@ export async function saveProxySalaryRecord(
     const [mutation] = await db.batch(statements);
     if (!mutation.meta.changes) throw new ApiError(409, '账号状态已发生变化，请刷新后重试。');
   }
-  return record;
+  return submit ? (await readSubmittedRecords(db, [record.id]))[0] : record;
 }
 
 export async function deleteProxySalaryRecord(
@@ -1003,7 +1008,7 @@ export async function createProxyPayrollBatch(actor: SessionActor, input: ProxyP
     }
     throw error;
   }
-  return { records, rule, replayed: false };
+  return { records: input.submit ? await readSubmittedRecords(db, recordIds) : records, rule, replayed: false };
 }
 
 export async function listRecurringPayrollRules(actor: SessionActor, targetUserId?: string) {
@@ -1443,12 +1448,17 @@ export async function reassignSalaryRecord(actor: SessionActor, id: string, revi
   if (record.status !== 2) throw new ApiError(409, '只能转交待审核申报。');
   if (!expectedUpdatedAt || record.updatedAt !== expectedUpdatedAt) throw new ApiError(409, '申报已变化，请刷新。');
   if (reviewerUserId !== null && (typeof reviewerUserId !== 'string' || !await db.prepare("SELECT id FROM payroll_users WHERE id = ? AND status = 'active' AND role IN ('reviewer','admin')").bind(reviewerUserId).first())) throw new ApiError(400, '审核员无效或已停用。');
+  if (reviewerUserId === record.userId && !await db.prepare(`SELECT id FROM payroll_users u WHERE id = ? AND
+    (role = 'admin' OR EXISTS (SELECT 1 FROM payroll_access_grants g WHERE g.viewer_user_id = u.id AND g.subject_user_id = u.id))`)
+    .bind(reviewerUserId).first()) throw new ApiError(400, '该账号未获本人审批授权，请选择其他审核员或交由管理员处理。');
   const now = nextVersionTimestamp(record.updatedAt);
   const auditId = newId('audit');
   const [mutation] = await db.batch([
     db.prepare(`UPDATE payroll_salary_records SET reviewer_user_id = ?, updated_at = ?, data_json = json_set(data_json, '$.updatedAt', ?)
       WHERE id = ? AND status = 2 AND updated_at = ? AND EXISTS (SELECT 1 FROM payroll_users WHERE id = ? AND status = 'active' AND role = 'admin')
-      AND (? IS NULL OR EXISTS (SELECT 1 FROM payroll_users WHERE id = ? AND status = 'active' AND role IN ('reviewer','admin')))`)
+      AND (? IS NULL OR EXISTS (SELECT 1 FROM payroll_users u WHERE id = ? AND status = 'active' AND role IN ('reviewer','admin')
+        AND (u.role = 'admin' OR u.id != payroll_salary_records.user_id OR EXISTS (
+          SELECT 1 FROM payroll_access_grants g WHERE g.viewer_user_id = u.id AND g.subject_user_id = u.id))))`)
       .bind(reviewerUserId, now, now, id, record.updatedAt, actor.userId, reviewerUserId, reviewerUserId),
     changedSalaryAuditStatement(db, auditId, actor.userId, 'salary.reassign', id, {subjectUserId: record.userId, businessMonth: record.workDate.slice(0,7), from: record.reviewerUserId, to: reviewerUserId}, now),
     ...recordLifecycleStatements(db, [id], auditId),
@@ -2236,16 +2246,27 @@ async function sanitizeSalaryRecord(
   return record;
 }
 
+async function readSubmittedRecords(db: D1Database, ids: string[]) {
+  const result = await db.prepare('SELECT id, user_id, status, currency, reviewer_user_id, data_json FROM payroll_salary_records WHERE id IN (SELECT value FROM json_each(?))')
+    .bind(JSON.stringify(ids)).all<RecordRow>();
+  const byId = new Map(result.results.map((row) => [row.id, recordFromRow(row)]));
+  return withReviewerNames(db, ids.flatMap((id) => byId.has(id) ? [byId.get(id)!] : []));
+}
+
 async function withReviewerNames(db: D1Database, records: SalaryRecord[]) {
   const ids = [...new Set(records.map((record) => record.reviewerUserId).filter(Boolean))];
   if (!ids.length) return records;
   const users = await db.prepare("SELECT id, email, profile_json, role, status FROM payroll_users WHERE id IN (SELECT value FROM json_each(?))")
     .bind(JSON.stringify(ids)).all<Pick<UserRow, 'id' | 'email' | 'profile_json' | 'role' | 'status'>>();
   const byId = new Map(users.results.map((user) => [user.id, user]));
+  const selfGrants = await db.prepare('SELECT viewer_user_id FROM payroll_access_grants WHERE viewer_user_id = subject_user_id AND viewer_user_id IN (SELECT value FROM json_each(?))')
+    .bind(JSON.stringify(ids)).all<{viewer_user_id: string}>();
+  const canSelfReview = new Set(selfGrants.results.map((grant) => grant.viewer_user_id));
   return records.map((record) => {
     const user = record.reviewerUserId ? byId.get(record.reviewerUserId) : null;
     return {...record, reviewerName: user ? profileDisplayName(parseProfile(user.profile_json), user.email) : undefined,
-      reviewerAvailable: Boolean(user && user.status === 'active' && ['reviewer','admin'].includes(user.role))};
+      reviewerAvailable: Boolean(user && user.status === 'active' && ['reviewer','admin'].includes(user.role)
+        && (user.role === 'admin' || user.id !== record.userId || canSelfReview.has(user.id)))};
   });
 }
 

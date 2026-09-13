@@ -2,6 +2,7 @@
 
 import { RecordDetailsButton } from './RecordDetailsButton';
 import { NumberInput, TravelFields } from './PayrollInputs';
+import { DateInput } from './DateInput';
 import { PayrollReminder } from './PayrollReminder';
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from 'react';
 import { FileNameInput, Field, FormSection, StatusMessage, invalidFormControlMessage } from './form-controls';
@@ -515,12 +516,11 @@ export function SalaryRecordDialog({
             <FormSection title="工作信息">
               <div className="form-grid form-grid--two">
                 <Field label="日期" required>
-                  <input
-                    type="date"
+                  <DateInput
                     min={month ? `${month}-01` : undefined}
                     max={month ? monthDateRange(month)?.end : undefined}
                     value={draft.workDate}
-                    onChange={(event) => update('workDate', event.target.value)}
+                    onChange={(value) => update('workDate', value)}
                     required
                   />
                 </Field>
@@ -545,7 +545,7 @@ export function SalaryRecordDialog({
                   </select>
                 </Field>
                 <Field label="计费方式" required>
-                  <select value={draft.applyType} onChange={(event) => update('applyType', Number(event.target.value) as SalaryApplyType)} disabled={!draft.departmentKey}>
+                  <select value={draft.applyType} onChange={(event) => update('applyType', Number(event.target.value) as SalaryApplyType)} required>
                     {allowedTypes.map((type) => <option key={type} value={type}>{getApplyTypeLabel(type)}</option>)}
                   </select>
                 </Field>

@@ -1,0 +1,114 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {createHash, randomUUID} from 'node:crypto';
+import {createRecord, currentMonth} from '../app/lib/payroll.ts';
+
+const fixture = JSON.parse(readFileSync('.local/permissions-qa-accounts.json', 'utf8'));
+const base = process.env.PAYROLL_TEST_BASE_URL;
+if (!base || fixture.base !== base || !['localhost','127.0.0.1'].includes(new URL(base).hostname)) throw Error('Run only after permissions checks in the same isolated localhost database.');
+let checks = 0;
+const equal = (actual, expected, label) => {assert.deepEqual(actual, expected, label); checks++;};
+async function req(path, actor, method='GET', body, status=200) {
+  const response = await fetch(base+path,{method,headers:{origin:base,...(actor?.cookie?{cookie:actor.cookie}:{}),...(body && !(body instanceof FormData)?{'content-type':'application/json'}:{})},body:body instanceof FormData?body:body===undefined?undefined:JSON.stringify(body)});
+  const data = await response.json(); equal(response.status,status,`${method} ${path}: ${JSON.stringify(data)}`);
+  return {...data,cookie:response.headers.get('set-cookie')?.split(';')[0]};
+}
+const login = async actor => Object.assign(actor,await req('/api/users/login',null,'POST',{email:actor.email,passwordDigest:createHash('sha256').update(actor.password).digest('hex')}));
+const [admin,r1,r2,owner,manager,viewer] = fixture.accounts;
+for (const actor of fixture.accounts) await login(actor);
+const managed = async actor => (await req('/api/admin/users',admin)).users.find(u=>u.id===actor.id);
+async function access(actor, values) {const u=await managed(actor);return req('/api/admin/users/'+actor.id+'/access',admin,'PATCH',{...u.access,...values,expectedUpdatedAt:u.updatedAt});}
+async function role(actor, values) {const u=await managed(actor);return req('/api/admin/users/'+actor.id,admin,'PATCH',{...values,expectedUpdatedAt:u.updatedAt});}
+for (const actor of [r1,r2]) {await role(actor,{role:'reviewer',status:'active',workManager:true}); await access(actor,{reviewerUserId:null,subjectUserIds:[],features:{summary:true,employees:false,audit:false}});}
+await role(manager,{role:'employee',status:'active',workManager:true}); await access(manager,{reviewerUserId:null,subjectUserIds:[]});
+await access(admin,{reviewerUserId:null}); await access(viewer,{subjectUserIds:[]});
+const month=currentMonth();
+const make=(actor,leader,values={})=>({...createRecord(actor.id),id:'salary-routing-'+randomUUID(),workDate:month+'-14',checkUserId:leader.id,checkUser:'测试负责人',departmentKey:'dept-teaching',departmentLabel:'教学部',applyType:2,rate:1000,amount:1,workContent:'默认审核分配回归',includeTravel:false,...values});
+const create=async(actor,leader,values={})=>(await req('/api/salary-records',actor,'POST',make(actor,leader,values),201)).record;
+const history=async(record,actor=admin)=>req('/api/salary-records/'+record.id+'/history',actor);
+const snapshot=async record=>(await history(record)).record;
+const submit=async actor=>req('/api/salary-records/apply/'+actor.id,actor,'POST',{month});
+const assignment=async(record,id,label)=>equal((await snapshot(record)).reviewerUserId,id,label);
+const reopen=async(record,actor)=>{const r=await snapshot(record);return (await req('/api/salary-records/'+r.id+'/reopen',actor,'POST',{expectedUpdatedAt:r.updatedAt})).record;};
+const decide=async(record,actor,status=200)=>{const r=await snapshot(record);return req('/api/review/salary-records/'+r.id,actor,'PATCH',{decision:'approve',expectedUpdatedAt:r.updatedAt},status);};
+const form=new FormData();form.set('file',new File(['%PDF-1.4\n%%EOF'],'routing-proof.pdf',{type:'application/pdf'}));
+const proof=(await req('/api/uploads',owner,'POST',form,201)).file.key;
+const automatic=await create(owner,r1,{attachments:[proof]});
+const adminDefault=await create(owner,admin);
+const unassigned=await create(owner,manager);
+const submitted=await submit(owner);
+equal(submitted.records.find(r=>r.id===automatic.id).reviewerUserId,r1.id,'submission response contains persisted assignment');
+await assignment(automatic,r1.id,'active reviewer leader is fallback');
+await assignment(adminDefault,admin.id,'active admin leader is fallback');
+await assignment(unassigned,null,'employee leader grants no reviewer role');
+await access(r1,{reviewerUserId:r2.id});
+await assignment(automatic,r1.id,'config change never reassigns pending records');
+const explicit=await create(owner,r1);await submit(owner);await assignment(explicit,r2.id,'explicit mapping takes priority');
+await req('/api/salary-records/'+explicit.id+'/history',r1,'GET',undefined,403);
+await req('/api/salary-records/'+automatic.id+'/history',r2,'GET',undefined,403);
+for (const [actor,status] of [[r1,200],[r2,403]]) {const response=await fetch(base+'/api/files?key='+encodeURIComponent(proof),{headers:{cookie:actor.cookie}});equal(response.status,status,'only assigned reviewer can download wage evidence');}
+const rows=(await req('/api/staff/transfer-sheet?month='+month+'&scope=assigned',r1)).rows;
+const ownRows=rows.find(row=>row.user.id===owner.id);
+equal(ownRows.records.some(r=>r.id===automatic.id),true,'assigned summary contains assigned detail');
+equal(ownRows.records.some(r=>r.id===explicit.id||r.id===unassigned.id),false,'summary never leaks unrelated wages');
+equal(ownRows.completeProfile,false,'assignment does not grant payment profile');
+await role(r2,{status:'disabled'});
+const invalid=await create(owner,r1);await submit(owner);await assignment(invalid,null,'invalid explicit reviewer must not fall back to leader');
+await role(r2,{status:'active',role:'employee'});
+const demoted=await create(owner,r1);await submit(owner);await assignment(demoted,null,'demoted explicit reviewer remains unassigned');
+await role(r2,{role:'reviewer'});await login(r2);
+await access(r1,{reviewerUserId:null});
+const stopped=await create(owner,r1);await role(r1,{status:'disabled'});await submit(owner);await assignment(stopped,null,'disabled leader at submission enters admin queue');
+await role(r1,{status:'active'});await login(r1);
+const self=await create(r1,r1);await submit(r1);await assignment(self,null,'reviewer self salary without grant enters admin queue');
+await decide(self,r1,403);
+let current=await snapshot(self);
+await req('/api/review/salary-records/'+self.id+'/assign',admin,'PATCH',{reviewerUserId:r1.id,expectedUpdatedAt:current.updatedAt},400);
+await access(r1,{subjectUserIds:[r1.id]});await reopen(self,r1);await submit(r1);await assignment(self,r1.id,'resubmission uses self grant');
+await access(r1,{subjectUserIds:[]});await decide(self,r1,403);
+equal((await snapshot(self)).reviewerAvailable,false,'revoked self authorization is visible as unavailable without rewriting history');
+await access(manager,{reviewerUserId:r1.id});
+const explicitSelf=await create(r1,manager);await submit(r1);await assignment(explicitSelf,null,'explicit mapping does not bypass self grant');
+await access(r1,{subjectUserIds:[r1.id]});current=await snapshot(explicitSelf);
+await req('/api/review/salary-records/'+explicitSelf.id+'/assign',admin,'PATCH',{reviewerUserId:r1.id,expectedUpdatedAt:current.updatedAt});await decide(explicitSelf,r1);
+const adminSelf=await create(admin,admin);await submit(admin);await assignment(adminSelf,admin.id,'admin self review needs no extra grant');await decide(adminSelf,admin);
+await access(r1,{subjectUserIds:[]});
+current=await snapshot(automatic);
+await req('/api/review/salary-records/'+automatic.id+'/assign',r1,'PATCH',{reviewerUserId:r2.id,expectedUpdatedAt:current.updatedAt},403);
+await req('/api/review/salary-records/'+automatic.id+'/assign',admin,'PATCH',{reviewerUserId:r2.id,expectedUpdatedAt:current.updatedAt});
+await req('/api/review/salary-records/'+automatic.id+'/assign',admin,'PATCH',{reviewerUserId:r1.id,expectedUpdatedAt:current.updatedAt},409);
+await req('/api/salary-records/'+automatic.id+'/history',r1,'GET',undefined,403);
+const transferred=await history(automatic,r2);
+equal(transferred.history.some(h=>h.action==='salary.submit'&&h.record?.reviewerUserId===r1.id),true,'original assignment snapshot survives transfer');
+equal(transferred.history.some(h=>h.action==='salary.reassign'&&h.record?.reviewerUserId===r2.id),true,'manual transfer adds separate snapshot');
+await reopen(automatic,owner);await submit(owner);await assignment(automatic,r1.id,'resubmission recalculates current leader configuration');
+const preserved=await history(automatic);
+equal(preserved.history.some(h=>h.action==='salary.reassign'&&h.record?.reviewerUserId===r2.id),true,'resubmission preserves prior handoff');
+await access(viewer,{subjectUserIds:[owner.id]});await decide(unassigned,viewer);
+equal((await managed(viewer)).role,'employee','full grant permits review without role escalation');
+await access(r1,{subjectUserIds:[owner.id]});current=await snapshot(automatic);
+await req('/api/review/salary-records/'+automatic.id+'/assign',admin,'PATCH',{reviewerUserId:r2.id,expectedUpdatedAt:current.updatedAt});await decide(automatic,r1);
+await access(r1,{subjectUserIds:[]});
+// Both admin single-entry submission and employee batch submission share the resolver.
+const proxy=(await req('/api/staff/payroll/records',admin,'POST',{targetUserId:owner.id,record:make(owner,r1),submit:true},201)).record;
+await assignment(proxy,r1.id,'proxy direct submit assigns default reviewer');
+equal(proxy.reviewerUserId,r1.id,'proxy response includes persisted reviewer');
+const batch=(await req('/api/staff/payroll/batches',owner,'POST',{requestId:'batch-request-'+randomUUID(),targetUserId:owner.id,month,mode:'calendar',submit:true,template:make(owner,r1),calendarSessions:[{workDate:month+'-14',startTime:'10:00',endTime:'11:00',restHours:0}]},201)).records;
+for(const record of batch) {await assignment(record,r1.id,'self batch assigns default reviewer');equal(record.reviewerUserId,r1.id,'batch response includes persisted reviewer');}
+// Defaults use submission order, not approval time or work date; draft edits do not replace them.
+const oldTravel=await create(owner,r1,{currency:'JPY',includeTravel:true,travelStart:'旧起点',travelEnd:'旧终点',travelFee:310});await submit(owner);
+const recentTravel=await create(owner,r1,{currency:'JPY',includeTravel:true,travelStart:'新宿',travelEnd:'中野',travelFee:620});await submit(owner);
+await decide(oldTravel,admin);
+equal((await req('/api/salary-records/travel-defaults?currency=JPY',owner)).travel.travelFee,620,'late approval cannot replace the last submitted travel fee');
+const returned=await reopen(recentTravel,owner);
+await req('/api/salary-records/'+recentTravel.id,owner,'PATCH',{...returned,travelFee:999});
+equal((await req('/api/salary-records/travel-defaults?currency=JPY',owner)).travel.travelFee,620,'editing recalled draft does not replace submitted defaults');
+await submit(owner);equal((await req('/api/salary-records/travel-defaults?currency=JPY',owner)).travel.travelFee,999,'resubmitted change becomes new default');
+const freeTravel=await create(owner,r1,{currency:'JPY',includeTravel:true,travelStart:'新宿',travelEnd:'中野',travelFee:0});await submit(owner);
+equal((await req('/api/salary-records/travel-defaults?currency=JPY',owner)).travel.travelFee,0,'explicit zero travel fee is remembered, not replaced by an older positive fee');
+const freeDraft=await reopen(freeTravel,owner);await req('/api/salary-records/'+freeTravel.id,owner,'PATCH',{...freeDraft,travelFee:999});await submit(owner);
+await create(owner,r1,{currency:'CNY',includeTravel:true,travelStart:'虹桥',travelEnd:'徐汇',travelFee:25});await submit(owner);
+equal((await req('/api/salary-records/travel-defaults?currency=CNY',owner)).travel.travelFee,25,'CNY defaults isolated');
+equal((await req('/api/salary-records/travel-defaults?currency=JPY',owner)).travel.travelFee,999,'JPY defaults remain unchanged');
+await req('/api/salary-records/travel-defaults?userId='+owner.id,r2,'GET',undefined,403);
+console.log(JSON.stringify({result:'PASS',checks,base,month}));

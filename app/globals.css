@@ -151,7 +151,7 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
 }
 
 .auth-links button,
-.row-actions button {
+.row-actions > button {
   border: 0;
   padding: 0;
   color: var(--xly-blue);
@@ -160,7 +160,7 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
 }
 
 .auth-links button:hover,
-.row-actions button:hover { text-decoration: underline; }
+.row-actions > button:hover { text-decoration: underline; }
 
 .form-field {
   display: grid;
@@ -744,15 +744,16 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
 
 .review-card dl {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 9px 18px;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(0, 1.35fr);
+  gap: 8px 14px;
   margin: 0;
   padding: 12px 14px 10px;
 }
 
 .review-card dl div { display: grid; gap: 4px; }
 .review-card dt { color: var(--xly-muted); font-size: 11px; }
-.review-card dd { margin: 0; color: #34415c; font-size: 14px; font-weight: 650; }
+.review-card dd { margin: 0; color: #34415c; font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
+.review-card > .row-actions { padding: 0 14px 12px; flex-wrap: wrap; gap: 10px 16px; }
 
 .attachment-links,
 .audit-memo { margin: 0 14px 12px; border-top: 1px dashed var(--xly-border); padding-top: 10px; }
@@ -834,8 +835,13 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
 .audit-list code { color: #596783; font-size: 10px; }
 
 .small-modal {
+  white-space: normal;
   width: min(100%, 470px);
-  border-radius: 8px;
+  max-height: calc(100dvh - 32px);
+  min-width: 0;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  border-radius: 12px;
   background: #fff;
   box-shadow: 0 25px 70px rgb(8 15 35 / 35%);
 }
@@ -844,6 +850,17 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
 .small-modal form { display: grid; gap: 16px; padding: 20px 22px; }
 .small-modal form > label { display: grid; gap: 6px; color: #394562; font-size: 12px; font-weight: 600; }
 .small-modal footer { display: flex; justify-content: flex-end; gap: 9px; margin-top: 2px; }
+.small-modal > *, .small-modal form > * { min-width: 0; }
+.small-modal h2 { font-size: 18px; line-height: 1.4; margin: 0; }
+.small-modal p { margin: 0; font-size: 14px; line-height: 1.7; white-space: normal; }
+.small-modal select, .small-modal input:not([type=checkbox]), .small-modal textarea { width: 100%; }
+.small-modal select { text-overflow: ellipsis; }
+.small-modal .dialog-body { padding: 22px; }
+.small-modal .dialog-footer { margin: 0; padding: 0 22px 22px; }
+.small-modal .dialog-help { color: var(--xly-muted); font-size: 13px; }
+.small-modal .access-check { display: flex; align-items: flex-start; gap: 8px; line-height: 1.6; }
+.small-modal footer button { min-height: 42px; }
+.notification-popup > div { min-width: 0; overflow-wrap: anywhere; }
 
 .currency-code {
   display: inline-flex;
@@ -1226,21 +1243,33 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
 .travel-fields { grid-column: 1 / -1; min-width: 0; }
 .travel-fields input::placeholder { color: #8b95a7; opacity: 1; }
 .travel-fields input:disabled { background: #f8f9fc; }
+.date-input { position: relative; display: block; min-width: 0; }
+.date-input > input { width: 100%; padding-right: 36px; }
+.date-input > input::-webkit-calendar-picker-indicator { opacity: 0; }
+.date-input__icon { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--xly-muted); }
+.date-calendar-backdrop { position: fixed; inset: 0; z-index: 110; display: grid; place-items: center; background: rgb(12 23 48 / 25%); padding: 14px; }
+.date-calendar { width: min(100%, 320px); max-height: calc(100dvh - 28px); overflow-y: auto; background: white; border: 1px solid var(--xly-border); border-radius: 12px; padding: 14px; box-shadow: 0 12px 40px rgb(8 15 35 / 20%); }
+.date-calendar header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.date-calendar strong { font-size: 16px; color: var(--xly-navy); }
+.date-calendar button { border: 0; border-radius: 6px; background: #f6f8fc; min-height: 36px; font-size: 14px; color: var(--xly-navy); }
+.date-calendar header button { display: grid; place-items: center; width: 36px; }
+.date-calendar button:disabled { opacity: .35; cursor: default; }
+.date-calendar button:hover:not(:disabled), .date-calendar button[aria-pressed=true] { color: white; background: var(--xly-navy); }
+.date-calendar__grid { display: grid; grid-template-columns: repeat(7,minmax(0,1fr)); gap: 4px; text-align: center; }
+.date-calendar__weekday { padding: 4px 0; color: var(--xly-muted); font-size: 12px; }
+.date-calendar__close { width: 100%; margin-top: 12px; }
 .status-badge--voided { color: #566273; background: #edf0f3; }
 .review-card--voided { border-left-color: #8994a4; }
 .archive-toggle { margin: 0 0 18px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .payroll-reminder { display: flex; align-items: center; gap: 8px; min-width: 0; margin: -4px 0 24px; border-block: 1px solid #f4cece; padding: 10px 0; color: #ba252a; background: #fff9f9; }
-.payroll-reminder__window { flex: 1; min-width: 0; overflow: hidden; }
-.payroll-reminder__track { display: flex; width: max-content; animation: payroll-reminder-scroll 26s linear infinite; font-family: PayrollReminderPixel, monospace; font-size: 24px; font-weight: 400; line-height: 1.4; white-space: nowrap; }
+.payroll-reminder__window { flex: 1; min-width: 0; min-height: 34px; overflow: hidden; }
+.payroll-reminder__track { display: flex; width: max-content; animation: payroll-reminder-scroll 24s linear both; font-family: PayrollReminderPixel, monospace; font-size: 24px; font-weight: 400; line-height: 1.4; white-space: nowrap; }
 .payroll-reminder__track > span { display: block; padding-inline: 12px 48px; }
-.payroll-reminder > button { flex-shrink: 0; display: grid; place-items: center; width: 32px; height: 32px; margin-right: 6px; border: 1px solid #edbfc1; border-radius: 4px; color: inherit; background: white; }
-.payroll-reminder[data-paused=true] .payroll-reminder__track, .payroll-reminder:hover .payroll-reminder__track, .payroll-reminder:focus-within .payroll-reminder__track { animation-play-state: paused; }
-@keyframes payroll-reminder-scroll { to { transform: translateX(-50%); } }
+@keyframes payroll-reminder-scroll { to { transform: translateX(-100%); } }
 @media (prefers-reduced-motion: reduce) {
   .payroll-reminder__track { animation: none; width: auto; white-space: normal; }
   .payroll-reminder__track > span { padding: 0 12px; }
-  .payroll-reminder__track > span + span, .payroll-reminder > button { display: none; }
 }
 .data-table-wrap { width: 100%; min-width: 0; max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; }
 .salary-table-wrap:focus-visible { outline: 2px solid var(--xly-blue); outline-offset: 2px; }
@@ -1258,7 +1287,15 @@ input, select, textarea { max-width: 100%; min-width: 0; }
   .salary-table { min-width: 760px; font-size: 12px; }
   .salary-table th, .salary-table td { padding: 10px; }
   .salary-table .row-actions { flex-wrap: nowrap; }
-  .small-modal { max-width: calc(100vw - 20px); margin: 10px auto; }
+  .modal-backdrop:has(> .small-modal) { align-items: center; padding: 10px; }
+  .small-modal { max-width: calc(100vw - 20px); margin: 0 auto; }
+  .small-modal > header { padding: 18px; gap: 12px; }
+  .small-modal form, .small-modal .dialog-body { padding: 18px; gap: 16px; }
+  .small-modal .dialog-footer { padding: 0 18px 18px; }
+  .small-modal footer { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 10px; }
+  .small-modal footer button { padding-inline: 10px; font-size: 14px; }
+  .small-modal .form-field__label { font-size: 14px; }
+  .small-modal input, .small-modal select, .small-modal textarea { font-size: 16px; }
   .record-detail-modal { width: calc(100vw - 20px); max-height: calc(100dvh - 20px); }
   .record-detail-body { padding: 16px; }
   .record-detail-modal > header { padding: 16px; gap: 8px; }

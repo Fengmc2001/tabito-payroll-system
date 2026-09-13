@@ -43,7 +43,7 @@ function RecordContent({record:r}: {record: SalaryRecord}) {
   return <div><div className="section-heading-inline"><strong>{r.workDate} · {STATUS[r.status].label}</strong><Money amount={r.finalSalary} currency={r.currency} /></div>
     <dl className="record-detail-grid">
       <div><dt>工作负责人</dt><dd>{r.checkUser || '—'}</dd></div>
-      {r.status !== 1 && <div><dt>指定审核员</dt><dd>{r.reviewerName || (r.reviewerUserId ? '已分配' : '管理员待办')}</dd></div>}
+      {r.status !== 1 && <div><dt>指定审核员</dt><dd>{r.reviewerName || (r.reviewerUserId ? '已分配' : '未指定审核员，由管理员处理')}</dd></div>}
       <div><dt>部门</dt><dd>{getDepartmentLabel(r.departmentKey,r.departmentLabel)}</dd></div>
       <div><dt>计费方式</dt><dd>{getApplyTypeLabel(r.applyType)}</dd></div>
       <div><dt>单价</dt><dd><Money amount={r.rate} currency={r.currency} /></dd></div>

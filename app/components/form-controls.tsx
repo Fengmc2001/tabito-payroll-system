@@ -26,12 +26,12 @@ function NavigationPrompt({ blocked, onFinish }: { blocked: boolean; onFinish: (
   const ref = useModalFocus(() => onFinish(false));
   return <div className="modal-backdrop">
     <section ref={ref} tabIndex={-1} className="small-modal" role="alertdialog" aria-modal="true" aria-labelledby="leave-prompt-title">
-      <h2 id="leave-prompt-title">{blocked ? '请稍候' : '内容尚未保存'}</h2>
-      <p>{blocked ? '正在保存或上传，完成后即可离开。' : '离开后，本次未保存的修改将被放弃。'}</p>
-      <div className="form-actions">
+      <header><h2 id="leave-prompt-title">{blocked ? '请稍候' : '放弃本次修改？'}</h2></header>
+      <div className="dialog-body"><p>{blocked ? '正在保存或上传，完成后即可离开。' : '尚未保存的内容将丢失，已保存的记录不受影响。'}</p></div>
+      <footer className="dialog-footer">
         <button type="button" className="secondary-button" onClick={() => onFinish(false)}>{blocked ? '知道了' : '继续填写'}</button>
         {!blocked && <button type="button" className="primary-button" onClick={() => onFinish(true)}>放弃修改</button>}
-      </div>
+      </footer>
     </section>
   </div>;
 }

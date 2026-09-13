@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 const unsaved = new Set<symbol>();
 const pending = new Set<symbol>();
+const modalStack: HTMLElement[] = [];
 
 export type LeavePrompt = { blocked: boolean; resolve: (leave: boolean) => void };
 let showPrompt: ((prompt: LeavePrompt) => void) | null = null;
@@ -64,11 +65,13 @@ export function useModalFocus(onClose: () => void, busy = false) {
     const modal = ref.current;
     if (!modal) return;
     const previous = document.activeElement as HTMLElement | null;
+    modalStack.push(modal);
     const focusables = () => Array.from(modal.querySelectorAll<HTMLElement>(
       'button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href],[tabindex="0"]',
     )).filter((element) => element.getClientRects().length > 0 && !element.closest('fieldset:disabled'));
     (focusables()[0] ?? modal).focus();
     const keydown = (event: KeyboardEvent) => {
+      if (modalStack.at(-1) !== modal) return;
       if (event.key === 'Escape') {
         event.preventDefault();
         event.stopPropagation();
@@ -84,14 +87,17 @@ export function useModalFocus(onClose: () => void, busy = false) {
       }
     };
     const focusin = (event: FocusEvent) => {
+      if (modalStack.at(-1) !== modal) return;
       if (!modal.contains(event.target as Node)) (focusables()[0] ?? modal).focus();
     };
     document.addEventListener('keydown', keydown, true);
     document.addEventListener('focusin', focusin);
     return () => {
+      const index = modalStack.indexOf(modal);
+      if (index !== -1) modalStack.splice(index, 1);
       document.removeEventListener('keydown', keydown, true);
       document.removeEventListener('focusin', focusin);
-      previous?.focus();
+      if (previous?.isConnected) previous.focus();
     };
   }, []);
   return ref;

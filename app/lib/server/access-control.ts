@@ -71,10 +71,14 @@ export function recordLifecycleStatements(db: D1Database, ids: string[], auditId
   const filter = "id IN (SELECT value FROM json_each(?)) AND EXISTS (SELECT 1 FROM payroll_audit_logs WHERE id = ?)";
   const statements: D1PreparedStatement[] = [];
   if (assign) statements.push(db.prepare(`UPDATE payroll_salary_records SET reviewer_user_id = (
-      SELECT reviewer.id FROM payroll_users manager JOIN payroll_users reviewer ON reviewer.id = manager.reviewer_user_id
+      SELECT reviewer.id FROM payroll_users manager JOIN payroll_users reviewer
+        ON reviewer.id = COALESCE(manager.reviewer_user_id, manager.id)
       WHERE manager.id = json_extract(payroll_salary_records.data_json, '$.checkUserId')
         AND manager.work_manager = 1 AND manager.status = 'active' AND reviewer.status = 'active'
         AND reviewer.role IN ('reviewer','admin')
+        AND (reviewer.role = 'admin' OR reviewer.id != payroll_salary_records.user_id OR EXISTS (
+          SELECT 1 FROM payroll_access_grants self_grant
+          WHERE self_grant.viewer_user_id = reviewer.id AND self_grant.subject_user_id = reviewer.id))
     ) WHERE status = 2 AND ${filter}`).bind(JSON.stringify(ids), auditId));
   statements.push(db.prepare(`INSERT INTO payroll_record_history
     (record_id, actor_user_id, action, status, reviewer_user_id, data_json, created_at)

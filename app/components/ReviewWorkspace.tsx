@@ -222,7 +222,7 @@ export function ReviewWorkspace({ administrator = false }: {administrator?: bool
                   <div><dt>计费方式</dt><dd>{getApplyTypeLabel(record.applyType)}</dd></div>
                   <div><dt>劳动 / 休息</dt><dd>{formatHours(record.workHours)} / {formatHours(record.restHours)} 小时</dd></div>
                   <div><dt>负责人</dt><dd>{record.checkUser}</dd></div>
-                  <div><dt>指定审核员</dt><dd>{record.reviewerName || '管理员待办'}{record.reviewerUserId && record.reviewerAvailable === false ? '（已停用或权限失效）' : ''}</dd></div>
+                  <div><dt>指定审核员</dt><dd>{record.reviewerName || '未指定审核员，由管理员处理'}{record.reviewerUserId && record.reviewerAvailable === false ? '（权限失效，由管理员处理）' : ''}</dd></div>
                 </dl>
                 {record.workContent && <p className="review-card__work-content"><b>工作内容</b><span>{record.workContent}</span></p>}
                 {record.attachments.length > 0 && <div className="attachment-links"><b>工资附件</b>{record.attachments.map((key, index) => (

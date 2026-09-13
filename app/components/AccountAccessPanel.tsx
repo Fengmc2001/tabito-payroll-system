@@ -47,10 +47,10 @@ function AccessEditor({user, users, onSaved, onEditingChange}: {user: ManagedUse
       </section>
       <section className="access-card"><h3>负责人对应审核员</h3>
         {user.workManager ? <label><span>{user.displayName} 负责的申报交给</span><select aria-label="指定审核员" value={draft.reviewerUserId || ''} onChange={(e) => setDraft({...draft,reviewerUserId:e.target.value || null})}>
-          <option value="">管理员待办（未指定）</option>
+          <option value="">按负责人角色自动分配</option>
           {draft.reviewerUserId && !reviewers.some((u) => u.id === draft.reviewerUserId) && <option value={draft.reviewerUserId}>原审核员已停用或不再有审核权限</option>}
           {reviewers.map((u) => <option key={u.id} value={u.id}>{u.displayName} · {u.email}</option>)}
-        </select><small>仅影响后续提交；已有待审记录请在工资审批中转交。</small></label> : <p className="muted-text">该账号不是工作负责人，无需设置审核员。</p>}
+        </select><small>未另行指定时，由具备审核角色的工作负责人本人审核。</small><small>本人工资需自审授权。仅影响后续提交，已有待审记录不改派。</small></label> : <p className="muted-text">该账号不是工作负责人，无需设置审核员。</p>}
       </section>
     </div>
     {user.role !== 'admin' && <section className="access-card"><h3>可查看完整资料并审批工资的员工 <span className="muted-text">已选 {draft.subjectUserIds.length} 人</span></h3>
