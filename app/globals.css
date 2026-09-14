@@ -288,26 +288,24 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
   height: 100vh;
   padding: 28px 18px 22px;
   color: #fff;
-  background: linear-gradient(180deg, var(--xly-navy-deep), var(--xly-navy));
+  background: #253970;
   box-shadow: 5px 0 18px rgb(18 31 67 / 11%);
 }
 
 .brand-lockup {
-  display: grid;
-  gap: 1px;
+  display: block;
+  width: 100%;
+  min-width: 0;
   border: 0;
   border-bottom: 1px solid rgb(255 255 255 / 13%);
-  padding: 0 10px 24px;
+  padding: 0 0 22px;
   color: #fff;
   text-align: left;
   background: transparent;
 }
 
-.brand-lockup strong { font-size: 17px; letter-spacing: .08em; }
-.brand-lockup strong { display: flex; align-items: center; gap: 8px; line-height: 1.5; }
-.brand-lockup strong svg { flex-shrink: 0; }
-.brand-lockup strong span { text-wrap: balance; }
-.brand-lockup > span { color: rgb(255 255 255 / 66%); font-size: 11px; letter-spacing: .15em; }
+.brand-lockup img { display: block; width: 100%; height: auto; pointer-events: none; }
+.brand-lockup:focus-visible { outline: 2px solid #f1c85b; outline-offset: 4px; }
 
 .app-nav { display: grid; gap: 6px; min-height: 0; margin-top: 24px; overflow-y: auto; padding-right: 3px; }
 
@@ -1182,7 +1180,7 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
     height: auto;
     padding: 16px 22px 0;
   }
-  .brand-lockup { border-bottom: 0; padding: 0; }
+  .brand-lockup { width: min(100%, 250px); align-self: center; border-bottom: 0; padding: 0; }
   .app-nav { grid-row: 2; grid-column: 1 / -1; display: flex; overflow-x: auto; overflow-y: hidden; margin: 0 -6px; padding-right: 0; }
   .app-nav__group { display: flex; align-items: center; flex: 0 0 auto; }
   .app-nav__children { display: flex; margin: 0; padding-left: 0; }
@@ -1386,7 +1384,6 @@ input, select, textarea { max-width: 100%; min-width: 0; }
   .record-modal__footer > div { flex-wrap: wrap; }
   .review-card__headline { flex-wrap: wrap; justify-content: flex-start; margin-left: 0; }
   .account-menu { flex-wrap: wrap; justify-content: flex-end; max-width: 120px; }
-  .brand-lockup strong { font-size: 14px; }
   .access-panel { padding: 12px; }
   .access-card { padding: 12px; }
   .access-check { align-items: flex-start; }

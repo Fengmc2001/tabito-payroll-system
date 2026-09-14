@@ -520,19 +520,21 @@ export async function getTravelDefaults(actor: SessionActor, userId: string, cur
   const currency = sanitizeCurrency(currencyInput);
   const db = await database();
   const row = await db.prepare(`SELECT data_json FROM (
-      SELECT h.data_json, r.currency, h.created_at AS submitted_at, h.id AS sequence
+      SELECT h.data_json, r.currency, h.created_at AS saved_at, h.id AS sequence
         FROM payroll_record_history h JOIN payroll_salary_records r ON r.id = h.record_id
-        WHERE r.user_id = ? AND r.status != 5 AND h.status = 2
-          AND h.action IN ('salary.submit','salary.proxy_submit','salary.proxy_batch_submit','salary.rule_generate')
+        WHERE r.user_id = ? AND r.status != 5 AND h.status IN (1,2)
+          AND h.action IN ('salary.create','salary.update','salary.proxy_create','salary.proxy_update','salary.proxy_batch_create',
+            'salary.submit','salary.proxy_submit','salary.proxy_batch_submit','salary.rule_generate')
       UNION ALL
-      SELECT data_json, currency, created_at, 0 FROM payroll_salary_records r WHERE user_id = ? AND status IN (2,3,4)
-        AND NOT EXISTS (SELECT 1 FROM payroll_record_history h WHERE h.record_id = r.id AND h.status = 2
-          AND h.action IN ('salary.submit','salary.proxy_submit','salary.proxy_batch_submit','salary.rule_generate'))
+      SELECT data_json, currency, created_at, 0 FROM payroll_salary_records r WHERE user_id = ? AND status IN (1,2,3,4)
+        AND NOT EXISTS (SELECT 1 FROM payroll_record_history h WHERE h.record_id = r.id AND h.status IN (1,2)
+          AND h.action IN ('salary.create','salary.update','salary.proxy_create','salary.proxy_update','salary.proxy_batch_create',
+            'salary.submit','salary.proxy_submit','salary.proxy_batch_submit','salary.rule_generate'))
     ) WHERE COALESCE(json_extract(data_json, '$.currency'), currency, 'JPY') = ?
       AND (json_extract(data_json, '$.includeTravel') = 1 OR
         (json_type(data_json, '$.includeTravel') IS NULL AND json_extract(data_json, '$.travelFee') > 0))
       AND EXISTS (SELECT 1 FROM payroll_users a WHERE a.id = ? AND a.status = 'active' AND (a.id = ? OR a.role = 'admin'))
-    ORDER BY submitted_at DESC, sequence DESC LIMIT 1`)
+    ORDER BY saved_at DESC, sequence DESC LIMIT 1`)
     .bind(userId, userId, currency, actor.userId, userId).first<{data_json: string}>();
   if (!row) return null;
   const r = parseRecord(row.data_json, currency);

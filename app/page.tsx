@@ -15,10 +15,10 @@ import {
   UserPlus,
   UserRound,
   UsersRound,
-  WalletCards,
   type LucideIcon,
 } from 'lucide-react';
 import { AdminWorkspace } from './components/AdminWorkspace';
+import { BrandHomeButton } from './components/BrandHomeButton';
 import { AuditWorkspace } from './components/AuditWorkspace';
 import { EmployeeWorkspace } from './components/EmployeeWorkspace';
 import { ProfileEditor } from './components/ProfileEditor';
@@ -31,7 +31,6 @@ import { confirmPageLeave, useFeedback } from './components/interaction-guards';
 import { ApiClientError, apiRequest } from './lib/api-client';
 import {
   APP_TITLE,
-  COMPANY_NAME,
   accountFeatures,
   accountCanReview,
   BOOTSTRAP_ADMIN_EMAIL,
@@ -510,10 +509,7 @@ function AppShell({
   return (
     <main className="app-shell">
       <aside className="app-sidebar">
-        <button className="brand-lockup" type="button" onClick={() => onNavigate('/')}>
-          <strong><WalletCards size={19} strokeWidth={1.9} aria-hidden="true" /><span>{COMPANY_NAME}</span></strong>
-          <span>工资申报</span>
-        </button>
+        <BrandHomeButton onHome={() => onNavigate('/')} />
         <nav className="app-nav" aria-label="主菜单">
           {links.map((link) => {
             const LinkIcon = link.icon;

@@ -45,8 +45,9 @@ ok(defaults.travel.travelFee===420 && defaults.travel.travelStart==='新宿','JP
 defaults=await req('/api/salary-records/travel-defaults?currency=CNY',owner);
 ok(defaults.travel.travelFee===18 && defaults.travel.travelStart==='虹桥','CNY defaults remain separate');
 const draftTravel = await create(owner,{includeTravel:true,travelFee:999,travelStart:'草稿路线'});
-ok((await req('/api/salary-records/travel-defaults?currency=JPY',owner)).travel.travelFee===420,'draft does not replace submitted defaults');
+ok((await req('/api/salary-records/travel-defaults?currency=JPY',owner)).travel.travelFee===999,'saved draft replaces defaults without submission');
 await remove(draftTravel,owner);
+ok((await req('/api/salary-records/travel-defaults?currency=JPY',owner)).travel.travelFee===420,'deleted draft is no longer a default');
 
 // A submitted record must first be reopened, and its original snapshot survives.
 const pending=(await history(travel)).record;

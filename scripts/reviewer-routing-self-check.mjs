@@ -95,14 +95,14 @@ await assignment(proxy,r1.id,'proxy direct submit assigns default reviewer');
 equal(proxy.reviewerUserId,r1.id,'proxy response includes persisted reviewer');
 const batch=(await req('/api/staff/payroll/batches',owner,'POST',{requestId:'batch-request-'+randomUUID(),targetUserId:owner.id,month,mode:'calendar',submit:true,template:make(owner,r1),calendarSessions:[{workDate:month+'-14',startTime:'10:00',endTime:'11:00',restHours:0}]},201)).records;
 for(const record of batch) {await assignment(record,r1.id,'self batch assigns default reviewer');equal(record.reviewerUserId,r1.id,'batch response includes persisted reviewer');}
-// Defaults use submission order, not approval time or work date; draft edits do not replace them.
+// Defaults use save/submission order, not approval time or work date; saved draft edits count too.
 const oldTravel=await create(owner,r1,{currency:'JPY',includeTravel:true,travelStart:'旧起点',travelEnd:'旧终点',travelFee:310});await submit(owner);
 const recentTravel=await create(owner,r1,{currency:'JPY',includeTravel:true,travelStart:'新宿',travelEnd:'中野',travelFee:620});await submit(owner);
 await decide(oldTravel,admin);
 equal((await req('/api/salary-records/travel-defaults?currency=JPY',owner)).travel.travelFee,620,'late approval cannot replace the last submitted travel fee');
 const returned=await reopen(recentTravel,owner);
 await req('/api/salary-records/'+recentTravel.id,owner,'PATCH',{...returned,travelFee:999});
-equal((await req('/api/salary-records/travel-defaults?currency=JPY',owner)).travel.travelFee,620,'editing recalled draft does not replace submitted defaults');
+equal((await req('/api/salary-records/travel-defaults?currency=JPY',owner)).travel.travelFee,999,'editing recalled draft replaces defaults before resubmission');
 await submit(owner);equal((await req('/api/salary-records/travel-defaults?currency=JPY',owner)).travel.travelFee,999,'resubmitted change becomes new default');
 const freeTravel=await create(owner,r1,{currency:'JPY',includeTravel:true,travelStart:'新宿',travelEnd:'中野',travelFee:0});await submit(owner);
 equal((await req('/api/salary-records/travel-defaults?currency=JPY',owner)).travel.travelFee,0,'explicit zero travel fee is remembered, not replaced by an older positive fee');
