@@ -8,7 +8,7 @@ import { useModalFocus } from './interaction-guards';
 
 export function RecordDetailsButton({record, label = '详情与审批记录'}: {record: SalaryRecord; label?: string}) {
   const [open, setOpen] = useState(false);
-  return <><button type="button" onClick={() => setOpen(true)}>{label}</button>{open && <RecordDetails id={record.id} onClose={() => setOpen(false)} />}</>;
+  return <><button type="button" className="record-details-link" onClick={() => setOpen(true)}>{label}</button>{open && <RecordDetails id={record.id} onClose={() => setOpen(false)} />}</>;
 }
 function RecordDetails({id, onClose}: {id: string; onClose: () => void}) {
   const [result, setResult] = useState<{record: SalaryRecord; history: RecordHistoryItem[]} | null>(null);

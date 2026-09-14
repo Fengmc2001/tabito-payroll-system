@@ -114,7 +114,7 @@ check(
   '导出重新取数并防止切换月份或页面后使用旧响应',
 );
 check(
-  tableSource.includes('RecordDetailsButton') && tableSource.includes('ReviewAssignment')
+  tableSource.includes('RecordHistoryContent') && tableSource.includes('ReviewAssignment')
     && reviewSource.includes('expectedUpdatedAt: item.record.updatedAt'),
   '审批记录支持详情、转交并携带记录版本',
 );

@@ -5,7 +5,7 @@ import {RecordHistoryItem, ReviewSalaryItem, SalaryRecord, STATUS, formatJapanDa
 import {employeeName, reviewPage} from '../lib/review-table';
 import {apiRequest} from '../lib/api-client';
 import {Money} from './payroll-ui';
-import {RecordDetailsButton, RecordHistoryContent} from './RecordDetailsButton';
+import {RecordHistoryContent} from './RecordDetailsButton';
 import {ReviewAssignment} from './ReviewAssignment';
 import {VoidSalaryButton} from './VoidSalaryButton';
 
@@ -55,7 +55,7 @@ export function ReviewTable({items,administrator,locked,busyId,onApprove,onRejec
               <td><span className="review-cell-truncate">{r.checkUser || '—'}</span></td>
               <td><span className="review-cell-summary" title={r.reviewerName || '未指定审核员，由管理员处理'}>{r.reviewerName || '未指定审核员，由管理员处理'}{r.reviewerUserId && r.reviewerAvailable===false && <small>权限失效，由管理员处理</small>}</span></td>
               <td>{item.submittedAt?<time dateTime={item.submittedAt}>{formatJapanDateTime(item.submittedAt)}</time>:<span title="旧记录未保存提交时间">—</span>}</td>
-              <td className="review-table-details"><button type="button" aria-expanded={open} aria-controls={`review-detail-${r.id}`} onClick={()=>toggle(r.id)}>{open?'收起详情':'展开详情'}</button><RecordDetailsButton record={r} label="弹窗查看"/></td>
+              <td className="review-table-details"><button type="button" aria-expanded={open} aria-controls={`review-detail-${r.id}`} onClick={()=>toggle(r.id)}>{open?'收起详情':'展开详情'}</button></td>
               <td className="review-table-operation">
                 {r.status===2?<div className="review-fixed-actions"><button type="button" className="review-approve" disabled={locked} aria-label={`通过 ${name} ${r.workDate}`} onClick={()=>onApprove(item)}>{busyId===r.id?'处理中':'通过'}</button><button type="button" className="review-reject" disabled={locked} aria-label={`驳回 ${name} ${r.workDate}`} onClick={()=>onReject(item)}>驳回</button></div>:<span className="review-operation-done">{status.label}</span>}
               </td>
@@ -64,7 +64,7 @@ export function ReviewTable({items,administrator,locked,busyId,onApprove,onRejec
               <section id={`review-detail-${r.id}`} className="review-inline-panel" aria-label={`${name} ${r.workDate} 工资详情`}>
                 <header className="review-inline-identity"><div><strong>{name}</strong><time dateTime={r.workDate}>{r.workDate}</time><Money amount={r.finalSalary} currency={r.currency}/></div><button type="button" aria-label={`收起 ${name} ${r.workDate} 详情`} onClick={()=>toggle(r.id)}><ChevronUp size={16}/> 收起</button></header>
                 <InlineHistory key={`${r.id}:${r.updatedAt}`} id={r.id}/>
-                {administrator && (r.status===2 || r.status===3) && <div className="row-actions review-inline-tools">{r.status===2 && <ReviewAssignment record={r} onSaved={onRefresh}/>} {r.status===3 && <VoidSalaryButton record={r} onSaved={onRefresh}/>}</div>}
+                {administrator && (r.status===2 || r.status===3) && <div className="row-actions review-inline-tools" role="group" aria-label="管理员操作"><span className="review-inline-tools__label">管理员操作</span>{r.status===2 && <ReviewAssignment record={r} onSaved={onRefresh}/>} {r.status===3 && <VoidSalaryButton record={r} onSaved={onRefresh}/>}</div>}
               </section>
             </td></tr>}
           </Fragment>;

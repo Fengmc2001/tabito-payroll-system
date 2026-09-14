@@ -31,4 +31,17 @@ equal(table.includes('pageItems.map(item=>item.record.id)'),true,'expand only cu
 equal(table.includes('r.status===2?<div className="review-fixed-actions">'),true,'processed rows have no decision buttons');
 equal(dialog.includes('onConfirm(reason.trim())'),true,'trim rejection reason');
 equal(dialog.includes('sending.current=true'),true,'dialog double click guard');
+const salary=readFileSync('app/components/SalaryWorkspace.tsx','utf8');
+const assignment=readFileSync('app/components/ReviewAssignment.tsx','utf8');
+const css=readFileSync('app/globals.css','utf8');
+const travel=readFileSync('app/components/PayrollInputs.tsx','utf8');
+equal(salary.includes('ReviewAssignment'),false,'do not add transfer to salary declaration');
+equal(table.includes('<RecordDetailsButton'),false,'review table has no duplicate detail modal');
+equal(table.includes('<InlineHistory'),true,'review table preserves inline history');
+equal(table.includes('aria-label="管理员操作"'),true,'admin transfer is clearly grouped');
+equal(table.includes('administrator && (r.status===2 || r.status===3)'),true,'transfer tools remain admin-only');
+equal(assignment.includes('expectedUpdatedAt:record.updatedAt'),true,'transfer preserves version checking');
+equal(css.includes('width: max-content; padding-inline-start: 100%; animation: payroll-reminder-scroll'),true,'reminder starts beyond full parent width');
+equal(travel.includes('remembered.current ?? previous ??'),true,'manual travel changes take priority over submitted defaults');
+equal(travel.includes('disabled={loading} aria-busy={loading}'),true,'travel cannot be enabled before defaults finish loading');
 console.log(JSON.stringify({result:'PASS',checks}));
