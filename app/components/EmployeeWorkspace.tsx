@@ -180,7 +180,7 @@ function paymentMethodLabel(value: string) {
 }
 
 function idTypeLabel(value: string) {
-  return value === 'residence' ? '在留卡' : value === 'china-id' ? '中国居民身份证' : value === 'passport' ? '护照' : '未填写';
+  return value === 'residence' ? '在留卡' : value === 'china-id' ? '中国居民身份证' : value === 'passport' ? '护照' : value === 'my-number' ? 'My Number Card' : '未填写';
 }
 
 function formatFileSize(size: number) {

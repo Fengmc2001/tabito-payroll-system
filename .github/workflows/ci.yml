@@ -27,6 +27,7 @@ jobs:
       - run: npm run self-check:delegated-ui
       - run: npm run self-check:review-table
       - run: npm run self-check:brand
+      - run: npm run self-check:profile-details
       - run: npm run self-check:permissions-migration
       - run: npm run self-check:approval-grants
       - run: npm audit --omit=dev
@@ -71,4 +72,5 @@ jobs:
           PAYROLL_TEST_BASE_URL=http://localhost:3200 npm run self-check:reviewer-routing
           PAYROLL_TEST_BASE_URL=http://localhost:3200 npm run self-check:travel-draft
           PAYROLL_TEST_BASE_URL=http://localhost:3200 npm run self-check:review-table-api
+          PAYROLL_TEST_BASE_URL=http://localhost:3200 npm run self-check:profile-details
           curl --fail --silent --show-error http://localhost:3200/cdn-cgi/local/scheduled > /dev/null

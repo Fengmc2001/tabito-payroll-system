@@ -47,7 +47,7 @@ export type Profile = {
   lastNameKana: string;
   birthday: string;
   gender: '' | '男' | '女' | '其他';
-  idType: '' | 'residence' | 'china-id' | 'passport';
+  idType: '' | 'residence' | 'china-id' | 'passport' | 'my-number';
   idFileNames: string[];
   nationality: string;
   idNumber: string;
@@ -655,7 +655,7 @@ export function profileMissingRequirements(profile: Profile) {
     if (!profile.addressOfLicense.trim()) missing.push('证件上住址所在地');
   }
   if (!profile.bankType) missing.push('工资收款方式');
-  if (profile.bankFileNames.length < 1 || profile.bankFileNames.length > 2) missing.push('银行卡正反面/支付宝账户截图');
+  if (profile.bankFileNames.length > 2) missing.push('收款截图最多上传 2 个附件');
   if (!profile.bankName.trim()) missing.push(profile.bankType === 'alipay' ? '支付宝账户' : '银行名称');
   if (!profile.bankAccountNumber.trim()) missing.push('收款账号');
   if (!profile.bankAccountHolder.trim()) missing.push('账户名');

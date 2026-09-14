@@ -2149,13 +2149,13 @@ function sanitizeProfile(input: Profile) {
     mutable[key] = cleanString(source[key], PROFILE_TEXT_MAX_LENGTH);
   }
   profile.gender = ['', '男', '女', '其他'].includes(profile.gender) ? profile.gender : '';
-  profile.idType = ['', 'residence', 'china-id', 'passport'].includes(profile.idType) ? profile.idType : '';
+  profile.idType = ['', 'residence', 'china-id', 'passport', 'my-number'].includes(profile.idType) ? profile.idType : '';
   profile.activityPermission = ['', '有', '无'].includes(profile.activityPermission) ? profile.activityPermission : '';
   profile.dependents = ['', '有', '无'].includes(profile.dependents) ? profile.dependents : '';
   profile.bankType = ['', 'jp-bank', 'cn-bank', 'alipay'].includes(profile.bankType) ? profile.bankType : '';
   profile.payeeIsSelf = ['', '是', '否'].includes(profile.payeeIsSelf) ? profile.payeeIsSelf : '';
   if (Array.isArray(source.bankFileNames) && source.bankFileNames.length > 2) {
-    throw new ApiError(400, '银行卡正反面最多上传 2 个附件。');
+    throw new ApiError(400, '银行卡/支付宝账户截图最多上传 2 个附件。');
   }
   const idFileLimit = profile.idType === 'passport' ? 1 : 2;
   if (Array.isArray(source.idFileNames) && source.idFileNames.length > idFileLimit) {

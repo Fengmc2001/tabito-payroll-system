@@ -34,6 +34,7 @@
     "self-check:review-table-api": "node --experimental-strip-types scripts/review-table-api-self-check.mjs",
     "self-check:travel-draft": "node --experimental-strip-types scripts/travel-draft-self-check.mjs",
     "self-check:brand": "node --experimental-strip-types scripts/brand-self-check.mjs",
+    "self-check:profile-details": "node --experimental-strip-types scripts/profile-details-self-check.mjs",
     "self-check:logic": "node scripts/payroll-logic-self-check.mjs",
     "self-check:timezone": "node --experimental-strip-types scripts/timezone-self-check.mjs",
     "self-check:audit-fixes": "node scripts/audit-fixes-self-check.mjs",

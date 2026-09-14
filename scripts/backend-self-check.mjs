@@ -373,7 +373,7 @@ const profileWithoutBankCard = {
   bankFileNames: [],
 };
 await expect(`/api/users/${employee.id}`, 200, 'optional identity, activity-permission and dependent fields can remain empty', {
-  method: 'PATCH', cookie: employeeCookie, body: { profile: profileWithoutBankCard },
+  method: 'PATCH', cookie: employeeCookie, body: { profile: { ...profileWithoutBankCard, bankAccountNumber: '' } },
 });
 
 const gateDraftId = `salary-${randomUUID()}`;
@@ -414,8 +414,8 @@ expectStatus(gateDraftCreate, 201, 'employee can prepare a draft before the full
 const blockedSubmission = await request(`/api/salary-records/apply/${employee.id}`, {
   method: 'POST', cookie: employeeCookie, body: { month: workDate.slice(0, 7) },
 });
-expectStatus(blockedSubmission, 400, 'salary submission requires at least one bank-card attachment');
-assert(String(blockedSubmission.data.error).includes('银行卡正反面'), 'incomplete-profile response names the missing bank-card attachment');
+expectStatus(blockedSubmission, 400, 'salary submission still requires the payment account number');
+assert(String(blockedSubmission.data.error).includes('收款账号'), 'incomplete-profile response names the missing payment account number');
 await expect(`/api/salary-records/${gateDraftId}?updatedAt=${encodeURIComponent(gateDraftCreate.data.record.updatedAt)}`, 200, 'unsubmitted profile-gate test draft can be deleted', {
   method: 'DELETE', cookie: employeeCookie,
 });

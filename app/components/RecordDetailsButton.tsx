@@ -1,5 +1,6 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { RecordHistoryItem, SalaryRecord, STATUS, formatHours, formatJapanDateTime, getApplyTypeLabel, getDepartmentLabel } from '../lib/payroll';
 import { apiRequest } from '../lib/api-client';
 import { appPath } from '../lib/app-path';
@@ -8,13 +9,18 @@ import { useModalFocus } from './interaction-guards';
 
 export function RecordDetailsButton({record, label = '详情与审批记录'}: {record: SalaryRecord; label?: string}) {
   const [open, setOpen] = useState(false);
-  return <><button type="button" className="record-details-link" onClick={() => setOpen(true)}>{label}</button>{open && <RecordDetails id={record.id} onClose={() => setOpen(false)} />}</>;
+  return <><button type="button" className="record-details-link" onClick={() => setOpen(true)}>{label}</button>{open && createPortal(<RecordDetails id={record.id} onClose={() => setOpen(false)} />, document.body)}</>;
 }
 function RecordDetails({id, onClose}: {id: string; onClose: () => void}) {
   const [result, setResult] = useState<{record: SalaryRecord; history: RecordHistoryItem[]} | null>(null);
   const [message, setMessage] = useState('');
   const [started, setStarted] = useState(false);
   const modalRef = useModalFocus(onClose, false);
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = previousOverflow; };
+  }, []);
   // Loading lives in a child effect to cancel responses after closing the dialog.
   return <div className="modal-backdrop"><section ref={modalRef} tabIndex={-1} className="small-modal record-detail-modal" role="dialog" aria-modal="true" aria-label="工资明细与审批记录">
     <header><h2>工资明细与审批记录</h2><button type="button" className="icon-button" onClick={onClose} aria-label="关闭详情">×</button></header>
@@ -36,7 +42,6 @@ export function RecordHistoryContent({result}: {result:{record:SalaryRecord;hist
       </article>) : <p>这条旧申报尚无历史快照，现有审批结果见上方。</p>}</div>
     </>;
 }
-import { useEffect } from 'react';
 function HistoryLoader({id,onResult,onError,onStart}: {id:string;onResult:(value:{record:SalaryRecord;history:RecordHistoryItem[]})=>void;onError:(value:string)=>void;onStart:(value:boolean)=>void}) {
   useEffect(() => {let active = true; onStart(true);
     void apiRequest<{record:SalaryRecord;history:RecordHistoryItem[]}>(`/api/salary-records/${id}/history`).then((data) => {if(active) onResult(data);}).catch((error) => {if(active) onError(error instanceof Error ? error.message : '加载失败。');});

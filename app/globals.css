@@ -1307,10 +1307,11 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
 .record-detail-grid dt { color: #64748b; font-size: .875rem; }
 .record-detail-grid dd { margin: .2rem 0; font-size: 1rem; overflow-wrap: anywhere; }
 @media (max-width: 800px) { .access-editor__grid, .access-targets { grid-template-columns: 1fr; } .record-detail-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } .access-panel { padding: 1rem; } }
-.record-detail-modal { width: min(900px, 94vw); max-height: 90vh; overflow-y: auto; }
+.record-detail-modal { display: flex; flex-direction: column; width: min(900px, 94vw); max-height: 90dvh; overflow: hidden; }
+.record-detail-modal > header { flex-shrink: 0; }
 
 /* Long record content must wrap inside its container, including on phones. */
-.record-detail-body { padding: 22px 26px 28px; overflow-wrap: anywhere; }
+.record-detail-body { min-height: 0; padding: 22px 26px 28px; overflow-y: auto; overscroll-behavior: contain; overflow-wrap: anywhere; }
 .record-detail-body > h3 { margin: 24px 0 14px; padding-top: 18px; border-top: 1px solid var(--xly-border); }
 .record-detail-body .section-heading-inline { align-items: center; flex-wrap: wrap; }
 .record-detail-body .section-heading-inline > span { font-size: 18px; font-weight: 750; color: var(--xly-navy); }

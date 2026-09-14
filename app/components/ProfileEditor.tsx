@@ -111,9 +111,9 @@ export function ProfileEditor({
       setMessage('请补全工资收款方式、账户名称、账号和账户姓名。');
       return;
     }
-    if (!firstTime && tab === 'payment' && (draft.bankFileNames.length < 1 || draft.bankFileNames.length > 2)) {
+    if (!firstTime && tab === 'payment' && draft.bankFileNames.length > 2) {
       setMessageTone('error');
-      setMessage('银行卡正反面/支付宝账户截图至少上传 1 个附件，最多 2 个。');
+      setMessage('银行卡/支付宝账户截图最多上传 2 个附件。');
       return;
     }
 
@@ -265,6 +265,7 @@ function DocumentFields({
             <option value="residence">在留卡</option>
             <option value="china-id">中国居民身份证</option>
             <option value="passport">护照</option>
+            <option value="my-number">My Number Card</option>
           </select>
         </Field>
         <Field label="登录身份证件上传">
@@ -300,7 +301,7 @@ function DocumentFields({
             <option value="无">无</option>
           </select>
         </Field>
-        <Field label="个人番号">
+        <Field label="My Number 番号（推荐填写）">
           <input maxLength={PROFILE_TEXT_MAX_LENGTH} value={draft.myNumber} onChange={(event) => setField('myNumber', event.target.value)} />
         </Field>
         <Field label="证件上住址所在地" required={isChinaId}>
@@ -347,7 +348,7 @@ function PaymentFields({
             <option value="alipay">支付宝</option>
           </select>
         </Field>
-        <Field label="银行卡正反面/支付宝账户截图" required>
+        <Field label="银行卡/支付宝账户截图（需核对推荐上传）">
           <FileNameInput value={draft.bankFileNames} maximum={2} onUpload={onUpload} onChange={(files) => setField('bankFileNames', files)} />
         </Field>
         <Field label={isAlipay ? '支付宝账户' : '银行名称'} required>
