@@ -273,7 +273,7 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
 
 .app-shell {
   display: grid;
-  grid-template-columns: 248px minmax(0, 1fr);
+  grid-template-columns: 208px minmax(0, 1fr);
   min-height: 100vh;
   background: var(--xly-page);
 }
@@ -284,9 +284,9 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
   display: flex;
   flex-direction: column;
   align-self: start;
-  width: 248px;
+  width: 208px;
   height: 100vh;
-  padding: 28px 18px 22px;
+  padding: 24px 14px 22px;
   color: #fff;
   background: #253970;
   box-shadow: 5px 0 18px rgb(18 31 67 / 11%);
@@ -1180,7 +1180,7 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
     height: auto;
     padding: 16px 22px 0;
   }
-  .brand-lockup { width: min(100%, 250px); align-self: center; border-bottom: 0; padding: 0; }
+  .brand-lockup { width: min(100%, 200px); align-self: center; border-bottom: 0; padding: 0; }
   .app-nav { grid-row: 2; grid-column: 1 / -1; display: flex; overflow-x: auto; overflow-y: hidden; margin: 0 -6px; padding-right: 0; }
   .app-nav__group { display: flex; align-items: center; flex: 0 0 auto; }
   .app-nav__children { display: flex; margin: 0; padding-left: 0; }

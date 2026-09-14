@@ -16,4 +16,6 @@ equal(brand.includes('type="button"') && brand.includes('onClick={onHome}'), tru
 equal(page.includes("<BrandHomeButton onHome={() => onNavigate('/')} />"), true, 'reuse guarded home navigation');
 equal(css.includes('.brand-lockup img { display: block; width: 100%; height: auto;'), true, 'responsive logo never stretches');
 equal(css.includes('background: #253970;'), true, 'sidebar matches supplied background');
+equal(css.includes('grid-template-columns: 208px minmax(0, 1fr);') && css.includes('width: 208px;'), true, 'sidebar and content grid share compact width');
+equal(css.includes('width: min(100%, 200px);'), true, 'mobile logo stays compact');
 console.log(JSON.stringify({ result: 'PASS', checks }));
