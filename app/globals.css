@@ -704,7 +704,10 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
 .review-account-menu { position: absolute; z-index: 30; top: calc(100% + 7px); left: 0; width: min(370px, calc(100vw - 48px)); max-width: calc(100vw - 48px); padding: 10px; border: 1px solid var(--xly-border); border-radius: 5px; background: #fff; box-shadow: 0 10px 28px #192c5020; }
 .review-account-menu > p { margin: 2px 2px 8px; }
 .review-account-search { display: flex; align-items: center; gap: 6px; padding: 0 8px; border: 1px solid var(--xly-border); border-radius: 3px; }
+.review-account-search:focus-within { border-color: var(--xly-blue); outline: 3px solid rgb(62 90 164 / 24%); outline-offset: 2px; }
+.review-account-search > svg { flex-shrink: 0; }
 .review-account-search input { min-width: 0; width: 100%; min-height: 36px; border: 0; }
+.review-account-search input:focus { outline: none; box-shadow: none; }
 .review-account-menu [role="listbox"] { max-height: 300px; overflow-y: auto; margin-top: 8px; }
 .review-account-menu [role="option"] { display: flex; justify-content: space-between; align-items: center; gap: 12px; width: 100%; min-height: 43px; padding: 9px 10px; border: 0; border-bottom: 1px solid #edf0f4; border-radius: 2px; background: #fff; color: #293957; text-align: left; font: inherit; font-size: 14px; }
 .review-account-name { min-width: 0; overflow-wrap: anywhere; }

@@ -142,6 +142,16 @@ try {
     await a.page.setViewportSize({width, height: 980});
     await a.page.locator('.review-account-trigger').click();
     await a.page.getByRole('listbox').waitFor();
+    const searchFocus = await a.page.getByLabel('搜索员工', {exact: true}).evaluate(input => {
+      const outer = input.closest('.review-account-search');
+      const icon = outer.querySelector('svg').getBoundingClientRect();
+      const frame = outer.getBoundingClientRect();
+      return {outer: getComputedStyle(outer).outlineStyle, inner: getComputedStyle(input).outlineStyle, shadow: getComputedStyle(input).boxShadow,
+        includesIcon: icon.left >= frame.left && icon.right <= frame.right && icon.top >= frame.top && icon.bottom <= frame.bottom};
+    });
+    equal(searchFocus.outer, 'solid', 'search focus outlines the complete field');
+    equal([searchFocus.inner, searchFocus.shadow], ['none', 'none'], 'search input has no duplicate inner focus ring');
+    equal(searchFocus.includesIcon, true, 'magnifier remains inside the focused search frame');
     // Account IDs are stable; names may have been changed by another regression.
     const users = await api(a.context, '/api/admin/users');
     const otherName = users.users.find(user => user.id === other.id).displayName;
