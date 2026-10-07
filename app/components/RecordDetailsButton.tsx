@@ -61,6 +61,8 @@ function RecordContent({record:r}: {record: SalaryRecord}) {
       <div><dt>时间</dt><dd>{r.startTime && r.endTime ? r.startTime + '–' + r.endTime : '—'}</dd></div>
       <div><dt>计薪 / 休息</dt><dd>{formatHours(r.workHours)} / {formatHours(r.restHours)} 小时</dd></div>
       <div><dt>交通费</dt><dd><Money amount={r.travelFee} currency={r.currency} /></dd></div>
+      <div><dt>餐补</dt><dd><Money amount={r.mealFee ?? 0} currency={r.currency} /></dd></div>
+      <div><dt>杂费</dt><dd><Money amount={r.miscFee ?? 0} currency={r.currency} /></dd></div>
       <div><dt>交通区间</dt><dd>{[r.travelStart,r.travelEnd].filter(Boolean).join(' → ') || '—'}</dd></div>
       <div><dt>创建人</dt><dd>{r.createdByName || '—'}</dd></div>
       <div><dt>提交人</dt><dd>{r.submittedByName || '—'}</dd></div>

@@ -3,6 +3,7 @@
 import { RecordDetailsButton } from './RecordDetailsButton';
 import { NumberInput, TravelFields } from './PayrollInputs';
 import { DateInput } from './DateInput';
+import { TimeInput } from './TimeInput';
 import { PayrollReminder } from './PayrollReminder';
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from 'react';
 import { FileNameInput, Field, FormSection, StatusMessage, invalidFormControlMessage } from './form-controls';
@@ -19,6 +20,7 @@ import {
   WorkManagerOption,
   cloneAsDraft,
   currentMonth,
+  defaultPayrollMonth,
   createRecord,
   emptyCurrencyAmounts,
   formatHours,
@@ -65,7 +67,7 @@ export function SalaryWorkspace({
   onUpload?: (file: File) => Promise<string>;
   embedded?: boolean;
 }) {
-  const naturalMonth = currentMonth();
+  const naturalMonth = defaultPayrollMonth();
   const [month, setMonth] = useState(naturalMonth);
   const [editing, setEditing] = useState<SalaryRecord | null>(null);
   const [notice, setNotice, noticeRevision] = useFeedback();
@@ -428,7 +430,8 @@ export function SalaryRecordDialog({
 }) {
   const [initialDraft] = useState(() => {
     const manager = resolveWorkManager(workManagers, initial.checkUserId, initial.checkUser);
-    return recalculateRecord({ ...initial, includeTravel: initial.includeTravel ?? initial.travelFee > 0, checkUserId: manager?.id ?? '', checkUser: manager?.label ?? '' });
+    const included = initial.includeSubsidies ?? initial.includeTravel ?? (initial.travelFee > 0 || (initial.mealFee ?? 0) > 0 || (initial.miscFee ?? 0) > 0);
+    return recalculateRecord({ ...initial, includeTravel: included, includeSubsidies: included, checkUserId: manager?.id ?? '', checkUser: manager?.label ?? '' });
   });
   const [draft, setDraft] = useState(initialDraft);
   const [error, setError, errorRevision] = useFeedback();
@@ -446,7 +449,7 @@ export function SalaryRecordDialog({
   const update = <K extends keyof SalaryRecord>(field: K, value: SalaryRecord[K]) => {
     setDraft((current) => {
       const next = { ...current, [field]: value };
-      if (field === 'currency' && value !== current.currency) next.includeTravel = false;
+      if (field === 'currency' && value !== current.currency) {next.includeTravel = false; next.includeSubsidies = false;}
       if (field === 'departmentKey') {
         const nextDepartment = departments.find((item) => item.key === value);
         next.departmentLabel = nextDepartment?.label ?? '';
@@ -485,7 +488,7 @@ export function SalaryRecordDialog({
       return;
     }
     if (completed.finalSalary > 100_000_000) {
-      setError('工资金额不能超过 100,000,000；请检查单价、数量和交通费。');
+      setError('工资金额不能超过 100,000,000；请检查单价、数量和补贴。');
       return;
     }
     setError('');
@@ -573,18 +576,12 @@ export function SalaryRecordDialog({
                 )}
                 {showTime && (
                   <Field label="开始时间" required>
-                    <select value={draft.startTime} onChange={(event) => update('startTime', event.target.value)}>
-                      <option value="">请选择</option>
-                      {TIME_OPTIONS.map((time) => <option key={time} value={time}>{time}</option>)}
-                    </select>
+                    <TimeInput label="开始时间" required value={draft.startTime} onChange={value => update('startTime', value)} />
                   </Field>
                 )}
                 {showTime && (
                   <Field label="结束时间" required>
-                    <select value={draft.endTime} onChange={(event) => update('endTime', event.target.value)}>
-                      <option value="">请选择</option>
-                      {TIME_OPTIONS.map((time) => <option key={time} value={time}>{time}</option>)}
-                    </select>
+                    <TimeInput label="结束时间" required allowEndOfDay value={draft.endTime} onChange={value => update('endTime', value)} />
                   </Field>
                 )}
                 {showTime && (

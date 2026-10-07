@@ -698,8 +698,30 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
 .filter-bar button:hover:not(:disabled),
 .filter-bar button.is-active { color: #fff; border-color: var(--xly-navy); background: var(--xly-navy); }
 
-.review-account-picker { display: grid; gap: 5px; color: #596783; font-size: 12px; font-weight: 700; }
-.review-account-picker select { width: min(230px, 30vw); min-height: 38px; }
+.review-account-picker { display: grid; gap: 5px; color: #596783; font-size: 12px; font-weight: 700; position: relative; width: 260px; max-width: 100%; min-width: 0; }
+.review-account-trigger { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 38px; padding: 9px 12px; border: 1px solid var(--xly-border); border-radius: 4px; background: #fff; text-align: left; color: #273755; font: inherit; font-size: 14px; }
+.review-account-trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-account-menu { position: absolute; z-index: 30; top: calc(100% + 7px); left: 0; width: min(370px, calc(100vw - 48px)); max-width: calc(100vw - 48px); padding: 10px; border: 1px solid var(--xly-border); border-radius: 5px; background: #fff; box-shadow: 0 10px 28px #192c5020; }
+.review-account-menu > p { margin: 2px 2px 8px; }
+.review-account-search { display: flex; align-items: center; gap: 6px; padding: 0 8px; border: 1px solid var(--xly-border); border-radius: 3px; }
+.review-account-search input { min-width: 0; width: 100%; min-height: 36px; border: 0; }
+.review-account-menu [role="listbox"] { max-height: 300px; overflow-y: auto; margin-top: 8px; }
+.review-account-menu [role="option"] { display: flex; justify-content: space-between; align-items: center; gap: 12px; width: 100%; min-height: 43px; padding: 9px 10px; border: 0; border-bottom: 1px solid #edf0f4; border-radius: 2px; background: #fff; color: #293957; text-align: left; font: inherit; font-size: 14px; }
+.review-account-name { min-width: 0; overflow-wrap: anywhere; }
+.review-account-name small { display: block; color: #65718b; font-size: 11px; }
+.review-account-state { flex-shrink: 0; font-size: 12px; font-weight: 500; color: #6c7890; }
+.review-account-trigger.is-complete, .review-account-menu [role="option"].is-complete { background: #eaf6ed; }
+.review-account-menu .is-complete .review-account-state { color: #27734b; }
+.review-account-menu [role="option"][aria-selected="true"] { box-shadow: inset 3px 0 #344c86; }
+.review-account-menu [role="option"]:focus-visible { outline: 2px solid #3f6ab5; outline-offset: -2px; }
+.review-account-empty { padding: 10px; text-align: center; }
+.time-input { position: relative; min-width: 0; }
+.time-input__trigger { width: 100%; min-height: 40px; padding: 10px 12px; border: 1px solid var(--xly-border); border-radius: 4px; background: #fff; color: #293957; text-align: left; font: inherit; }
+.time-input__validation { position: absolute; bottom: 0; left: 0; width: 1px !important; height: 1px !important; min-height: 0 !important; opacity: 0; padding: 0 !important; pointer-events: none; }
+.time-input__popover { position: absolute; z-index: 35; top: calc(100% + 5px); left: 0; width: min(240px, calc(100vw - 60px)); max-width: 100%; min-width: min(180px, 100%); padding: 12px; border: 1px solid var(--xly-border); border-radius: 5px; background: #fff; box-shadow: 0 8px 24px #192c5025; }
+.time-input__parts { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 8px; align-items: center; margin-bottom: 10px; }
+.time-input__parts select { min-width: 0; width: 100%; }
+.time-input__popover .primary-button { width: 100%; }
 .review-workspace .heading-actions { align-items: flex-end; }
 .review-workspace .summary-card strong > .currency-totals > span { font-size: 16px; }
 
@@ -1232,7 +1254,7 @@ input:disabled { color: var(--xly-muted); background: #f4f6fa; }
   .history-item dl { grid-template-columns: 1fr; }
   .review-workspace .heading-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); width: 100%; }
   .review-account-picker { grid-column: 1 / -1; width: 100%; }
-  .review-account-picker select,
+  .review-account-trigger,
   .review-workspace .month-picker input { width: 100%; }
   .review-workspace .heading-actions > .secondary-button { align-self: end; min-height: 40px; }
   .review-card > header { align-items: flex-start; flex-wrap: wrap; }

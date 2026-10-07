@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import ts from 'typescript';
+import {unzipSync, strFromU8} from 'fflate';
 import { appPath } from '../app/lib/app-path.ts';
 import { accountAuditQuery } from '../app/lib/account-audit-query.ts';
 import { createRecord, createEmptyProfile, DEFAULT_DEPARTMENTS, effectivePayee, normalizePayeeProfile,
@@ -153,31 +154,39 @@ checks++;
 equal({ ...db.prepare("SELECT status, final_salary FROM payroll_salary_records WHERE id = 'proxy-race'").get() }, { status: 1, final_salary: 500 }, 'deactivated employee draft amount and submission state remain unchanged');
 equal(db.prepare('SELECT count(*) AS n FROM payroll_audit_logs').get().n, countBeforeRace, 'rejected concurrent proxy save writes no audit');
 const transferSource = ts.createSourceFile('TransferSheetWorkspace.tsx', readFileSync(new URL('../app/components/TransferSheetWorkspace.tsx', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+// Import the actual workbook builder without depending on Node's extensionless
+// TypeScript module resolution; the application bundles the same module.
+const exportCode = ts.transpileModule(readFileSync(new URL('../app/lib/payroll-export.ts', import.meta.url), 'utf8'), {compilerOptions: {module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022}}).outputText
+  .replace("from './payroll'", `from '${new URL('../app/lib/payroll.ts', import.meta.url).href}'`)
+  .replace("from 'fflate'", `from '${import.meta.resolve('fflate')}'`);
+const {buildPayrollWorkbook} = await import('data:text/javascript;base64,' + Buffer.from(exportCode).toString('base64'));
 let exportedBlob, exportedName;
 const anchor = { click() { exportedName = this.download; }, remove() {} };
 const exportSheet = actualFunction('downloadTransferSheet', {
-  effectivePayee,
-  paymentMethodLabel: actualFunction('paymentMethodLabel', {}, transferSource),
-  escapeXml: actualFunction('escapeXml', {}, transferSource),
+  buildPayrollWorkbook,
+  Uint8Array,
   Blob,
   URL: { createObjectURL(blob) { exportedBlob = blob; return 'blob:test'; }, revokeObjectURL() {} },
   document: { createElement() { return anchor; }, body: { appendChild() {} } },
   window: { setTimeout(callback) { callback(); } },
 }, transferSource);
 exportSheet([{
-  user: { displayName: '姓名<&>' },
+  user: { displayName: '姓名<&>', email: 'test@example.invalid' },
   profile: { ...profile, payeeIsSelf: '是', tel: '电话\\n微信', bankAccountNumber: '0001234567890123456789', bankAccountHolder: '=1+1' },
   approvedAmounts: { JPY: 1690, CNY: 200 },
+  completeProfile: true,
+  records: [{...base, status: 3, currency: 'JPY', finalSalary: 1690, workDate: '2026-09-01'}, {...base, id: base.id + '-cny', status: 3, currency: 'CNY', finalSalary: 200, workDate: '2026-09-01'}],
 }], '2026-09');
-const workbook = await exportedBlob.text();
-equal(exportedName, '旅人教育-工资汇总-2026-09.xls', 'export keeps expected filename');
-equal((workbook.match(/<Row>/g) ?? []).length, 2, 'one header row and one employee row');
-equal((workbook.match(/<Cell>/g) ?? []).length, 22, '11 columns and no PDF column');
-equal(workbook.includes('<Data ss:Type="String">0001234567890123456789</Data>'), true, 'long account and leading zeros remain text');
-equal(workbook.includes('<Data ss:Type="String">=1+1</Data>'), true, 'formula-looking text is not exported as a formula');
+const archive = unzipSync(new Uint8Array(await exportedBlob.arrayBuffer()));
+const workbook = strFromU8(archive['xl/worksheets/sheet1.xml']);
+equal(exportedName, '旅人教育-工资汇总-2026-09.xlsx', 'export uses real XLSX filename');
+equal((workbook.match(/<row /g) ?? []).length, 3, 'month title, headers and employee row');
+equal((workbook.match(/<c /g) ?? []).length, 23, 'title plus 11 columns, without PDF column');
+equal(workbook.includes('t="inlineStr"><is><t xml:space="preserve">0001234567890123456789</t>'), true, 'long account and leading zeros remain text');
+equal(workbook.includes('t="inlineStr"><is><t xml:space="preserve">=1+1</t>') && !workbook.includes('<f>'), true, 'formula-looking text is not exported as a formula');
 equal(workbook.includes('姓名&lt;&amp;&gt;'), true, 'XML special characters escaped');
 equal(workbook.includes('代收人'), false, 'export never reuses stale third-party payee');
-equal(workbook.includes('<Data ss:Type="Number">1690</Data>') && workbook.includes('<Data ss:Type="Number">200</Data>'), true, 'currency amounts remain separate numeric cells');
+equal(workbook.includes('<v>1690</v>') && workbook.includes('<v>200</v>'), true, 'currency amounts remain separate numeric cells');
 const auditSource = ts.createSourceFile('AuditWorkspace.tsx', readFileSync(new URL('../app/components/AuditWorkspace.tsx', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 let loadCallback;
 function visit(node) {

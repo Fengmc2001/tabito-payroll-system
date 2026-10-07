@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 
 const source = await readFile(new URL('../app/components/DelegatedSalaryWorkspace.tsx', import.meta.url), 'utf8');
 const pageSource = await readFile(new URL('../app/page.tsx', import.meta.url), 'utf8');
@@ -71,12 +72,13 @@ check(
 );
 check(
   reviewSource.includes("const [selectedUserId, setSelectedUserId] = useState('');")
-    && reviewSource.includes("<option value=\"\">{administrator ? '全部账号' : '全部可审核账号'}</option>"),
+    && reviewSource.includes('<ReviewAccountPicker')
+    && readFileSync(new URL('../app/components/ReviewAccountPicker.tsx', import.meta.url), 'utf8').includes("administrator ? '全部账号' : '全部可审核账号'"),
   '工资审核默认显示全部账号并提供账号筛选器',
 );
 check(
-  reviewSource.includes('<option key={user.id} value={user.id}>')
-    && reviewSource.includes('duplicateEmployeeNames.has(user.displayName)'),
+  readFileSync(new URL('../app/components/ReviewAccountPicker.tsx', import.meta.url), 'utf8').includes('choose(option.id)')
+    && readFileSync(new URL('../app/components/ReviewAccountPicker.tsx', import.meta.url), 'utf8').includes('duplicates.has(option.name)'),
   '工资审核使用账号 ID 筛选并在重名时追加邮箱',
 );
 check(
@@ -87,9 +89,9 @@ check(
   '审核列表和三张汇总卡共同使用月份与账号范围',
 );
 check(
-  reviewSource.includes('event.target.value || currentMonth()')
+  reviewSource.includes('event.target.value || defaultPayrollMonth()')
     && reviewSource.includes("!reviewResult.items.some((item) => item.user.id === current) ? '' : current"),
-  '月份清空会回退当前月且失效账号会回退全部账号',
+  '月份清空会回退按截止日计算的工资月份，失效账号会回退全部账号',
 );
 check(
   reviewSource.includes('requestRevision.current === revision')

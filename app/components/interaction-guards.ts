@@ -68,11 +68,13 @@ export function useModalFocus(onClose: () => void, busy = false) {
     modalStack.push(modal);
     const focusables = () => Array.from(modal.querySelectorAll<HTMLElement>(
       'button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href],[tabindex="0"]',
-    )).filter((element) => element.getClientRects().length > 0 && !element.closest('fieldset:disabled'));
+    )).filter((element) => element.tabIndex >= 0 && element.getClientRects().length > 0 && !element.closest('fieldset:disabled'));
     (focusables()[0] ?? modal).focus();
     const keydown = (event: KeyboardEvent) => {
       if (modalStack.at(-1) !== modal) return;
       if (event.key === 'Escape') {
+        // A nested picker handles its own Escape without discarding the form.
+        if ((event.target as HTMLElement | null)?.closest('[data-modal-escape-layer]')) return;
         event.preventDefault();
         event.stopPropagation();
         if (!busyRef.current) closeRef.current();

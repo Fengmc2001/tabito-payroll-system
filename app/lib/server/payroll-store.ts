@@ -33,6 +33,7 @@ import {
   birthdayIsValid,
   createEmptyProfile,
   currentMonth,
+  defaultPayrollMonth,
   dateIsValid,
   emptyCurrencyAmounts,
   expandFixedPayrollSchedule,
@@ -516,6 +517,20 @@ export async function listSalaryRecords(userId: string) {
 }
 
 export async function getTravelDefaults(actor: SessionActor, userId: string, currencyInput: string) {
+  const r = await latestSubsidyRecord(actor, userId, currencyInput);
+  return r ? {travelStart: r.travelStart, travelEnd: r.travelEnd, travelFee: r.travelFee} : null;
+}
+
+export async function getSubsidyDefaults(actor: SessionActor, userId: string, currencyInput: string) {
+  const [travel, meal] = await Promise.all([
+    latestSubsidyRecord(actor, userId, currencyInput),
+    latestSubsidyRecord(actor, userId, currencyInput, true),
+  ]);
+  if (!travel && !meal) return null;
+  return {travelStart: travel?.travelStart ?? '', travelEnd: travel?.travelEnd ?? '', travelFee: travel?.travelFee ?? 0, mealFee: meal?.mealFee ?? 0};
+}
+
+async function latestSubsidyRecord(actor: SessionActor, userId: string, currencyInput: string, requireMeal = false) {
   requirePayrollTarget(actor, userId);
   const currency = sanitizeCurrency(currencyInput);
   const db = await database();
@@ -523,22 +538,20 @@ export async function getTravelDefaults(actor: SessionActor, userId: string, cur
       SELECT h.data_json, r.currency, h.created_at AS saved_at, h.id AS sequence
         FROM payroll_record_history h JOIN payroll_salary_records r ON r.id = h.record_id
         WHERE r.user_id = ? AND r.status != 5 AND h.status IN (1,2)
-          AND h.action IN ('salary.create','salary.update','salary.proxy_create','salary.proxy_update','salary.proxy_batch_create',
-            'salary.submit','salary.proxy_submit','salary.proxy_batch_submit','salary.rule_generate')
+          AND h.action IN ('salary.create','salary.update','salary.proxy_create','salary.proxy_update','salary.proxy_submit','salary.proxy_batch_create','salary.proxy_batch_submit','salary.rule_generate')
       UNION ALL
       SELECT data_json, currency, created_at, 0 FROM payroll_salary_records r WHERE user_id = ? AND status IN (1,2,3,4)
         AND NOT EXISTS (SELECT 1 FROM payroll_record_history h WHERE h.record_id = r.id AND h.status IN (1,2)
-          AND h.action IN ('salary.create','salary.update','salary.proxy_create','salary.proxy_update','salary.proxy_batch_create',
-            'salary.submit','salary.proxy_submit','salary.proxy_batch_submit','salary.rule_generate'))
+          AND h.action IN ('salary.create','salary.update','salary.proxy_create','salary.proxy_update','salary.proxy_submit','salary.proxy_batch_create','salary.proxy_batch_submit','salary.rule_generate'))
     ) WHERE COALESCE(json_extract(data_json, '$.currency'), currency, 'JPY') = ?
-      AND (json_extract(data_json, '$.includeTravel') = 1 OR
-        (json_type(data_json, '$.includeTravel') IS NULL AND json_extract(data_json, '$.travelFee') > 0))
+      AND (COALESCE(json_extract(data_json, '$.includeSubsidies'), json_extract(data_json, '$.includeTravel')) = 1 OR
+        (json_type(data_json, '$.includeSubsidies') IS NULL AND json_type(data_json, '$.includeTravel') IS NULL AND json_extract(data_json, '$.travelFee') > 0))
+      ${requireMeal ? "AND json_type(data_json, '$.mealFee') IN ('integer', 'real')" : ''}
       AND EXISTS (SELECT 1 FROM payroll_users a WHERE a.id = ? AND a.status = 'active' AND (a.id = ? OR a.role = 'admin'))
     ORDER BY saved_at DESC, sequence DESC LIMIT 1`)
     .bind(userId, userId, currency, actor.userId, userId).first<{data_json: string}>();
   if (!row) return null;
-  const r = parseRecord(row.data_json, currency);
-  return r ? {travelStart: r.travelStart, travelEnd: r.travelEnd, travelFee: r.travelFee} : null;
+  return parseRecord(row.data_json, currency);
 }
 
 export async function voidSalaryRecord(
@@ -660,7 +673,7 @@ export async function applySalaryRecords(userId: string, requestedMonth?: string
   const profile = parseProfile(user.profile_json);
   const profileError = profileSubmissionError(profile);
   if (profileError) throw new ApiError(400, profileError);
-  const month = requestedMonth ?? currentMonth();
+  const month = requestedMonth ?? defaultPayrollMonth();
   if (!monthIsValid(month)) throw new ApiError(400, '申报月份格式无效。');
   const draftRows = await db.prepare(`SELECT id, user_id, status, currency, reviewer_user_id, data_json
     FROM payroll_salary_records
@@ -1733,7 +1746,7 @@ export async function getStaffEmployeeDetail(actor: SessionActor, targetUserId: 
 }
 
 export async function getStaffTransferSheet(actor: SessionActor, requestedMonth?: string, scope = 'all'): Promise<TransferSheetRow[]> {
-  const month = requireMonth(requestedMonth || currentMonth());
+  const month = requireMonth(requestedMonth || defaultPayrollMonth());
   if (!['all','assigned','granted'].includes(scope)) throw new ApiError(400, '查看范围无效。');
   const db = await database();
   await requireFeature(db, actor, 'summary');
@@ -1751,8 +1764,9 @@ export async function getStaffTransferSheet(actor: SessionActor, requestedMonth?
     WHERE user_id IN (SELECT value FROM json_each(?)) AND content_type = 'application/pdf' AND ${fileAccessSql(actor)}`)
     .bind(JSON.stringify(fullIds)).all<StaffFileRow>();
   const rows: TransferSheetRow[] = [];
+  const namedRecords = await withReviewerNames(db, result.results.map(recordFromRow));
   for (const user of users.results) {
-    const records = result.results.filter((r) => r.user_id === user.id).map(recordFromRow);
+    const records = namedRecords.filter((record) => record.userId === user.id);
     const completeProfile = Boolean(user.complete_profile);
     if (!records.length && (scope === 'assigned' || !completeProfile)) continue;
     rows.push({ user: completeProfile ? toManagedUser(user) : { ...toManagedUser(user), email: '', lastLoginAt: null, profileReady: false, createdAt: '', updatedAt: '' },
@@ -2197,6 +2211,12 @@ async function sanitizeSalaryRecord(
     if (typeof input[field] !== 'number' || !Number.isFinite(input[field])) throw new ApiError(400, '金额、数量和休息时间必须是有效数字。');
   }
   if (input.includeTravel !== undefined && typeof input.includeTravel !== 'boolean') throw new ApiError(400, '交通费选项无效。');
+  if (input.includeSubsidies !== undefined && typeof input.includeSubsidies !== 'boolean') throw new ApiError(400, '补贴选项无效。');
+  for (const field of ['mealFee', 'miscFee'] as const) {
+    if (input[field] !== undefined && (typeof input[field] !== 'number' || !Number.isFinite(input[field]) || !Number.isInteger(input[field]) || input[field] < 0 || input[field] > 10_000_000)) {
+      throw new ApiError(400, '餐补和杂费必须是 0 至 10,000,000 的整数。');
+    }
+  }
   await assertOwnedFiles(db, userId, attachments);
   const now = existing ? nextVersionTimestamp(existing.updatedAt) : new Date().toISOString();
   const record = recalculateRecord({
@@ -2218,7 +2238,10 @@ async function sanitizeSalaryRecord(
     travelStart: cleanStringStrict(input.travelStart, 300, '交通出发地'),
     travelEnd: cleanStringStrict(input.travelEnd, 300, '交通到达地'),
     travelFee: boundedNumber(input.travelFee, 0, 10_000_000),
-    includeTravel: input.includeTravel,
+    mealFee: input.mealFee ?? existing?.mealFee ?? 0,
+    miscFee: input.miscFee ?? existing?.miscFee ?? 0,
+    includeTravel: input.includeTravel === false || input.includeSubsidies === false ? false : input.includeSubsidies ?? input.includeTravel,
+    includeSubsidies: input.includeTravel === false || input.includeSubsidies === false ? false : input.includeSubsidies ?? input.includeTravel,
     totalHours: 0,
     workHours: 0,
     restHours: boundedNumber(input.restHours, 0, 24),
@@ -2927,6 +2950,9 @@ async function hashProxyPayrollBatchInput(input: ProxyPayrollBatchInput) {
     travelEnd: normalizedHashString(template.travelEnd),
     travelFee: normalizedHashNumber(template.travelFee),
     includeTravel: template.includeTravel,
+    ...(template.mealFee !== undefined ? {mealFee: normalizedHashNumber(template.mealFee)} : {}),
+    ...(template.miscFee !== undefined ? {miscFee: normalizedHashNumber(template.miscFee)} : {}),
+    ...(template.includeSubsidies !== undefined ? {includeSubsidies: template.includeSubsidies} : {}),
     attachments: Array.isArray(template.attachments)
       ? template.attachments.map(normalizedHashString).filter(Boolean).sort()
       : [],

@@ -42,6 +42,6 @@ equal(table.includes('aria-label="管理员操作"'),true,'admin transfer is cle
 equal(table.includes('administrator && (r.status===2 || r.status===3)'),true,'transfer tools remain admin-only');
 equal(assignment.includes('expectedUpdatedAt:record.updatedAt'),true,'transfer preserves version checking');
 equal(css.includes('width: max-content; padding-inline-start: 100%; animation: payroll-reminder-scroll'),true,'reminder starts beyond full parent width');
-equal(travel.includes('remembered.current ?? previous ??'),true,'manual travel changes take priority over submitted defaults');
+equal(travel.includes('remembered.current ?? {') && travel.includes('previous ?? {'),true,'manual subsidy changes take priority over saved defaults');
 equal(travel.includes('disabled={loading} aria-busy={loading}'),true,'travel cannot be enabled before defaults finish loading');
 console.log(JSON.stringify({result:'PASS',checks}));

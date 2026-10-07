@@ -1,5 +1,6 @@
 'use client';
 import { NumberInput, TravelFields } from './PayrollInputs';
+import { TimeInput } from './TimeInput';
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CalendarClock, Pause, Play, RefreshCw, Trash2 } from 'lucide-react';
@@ -21,7 +22,7 @@ import {
   WorkManagerOption,
   cloneAsDraft,
   createRecord,
-  currentMonth,
+  defaultPayrollMonth,
   expandFixedPayrollSchedule,
   formatHours,
   getApplyTypeLabel,
@@ -39,7 +40,6 @@ import {
   SalaryStatusSection,
   SalaryTable,
   SummaryCard,
-  TIME_OPTIONS,
   messageFrom,
   summarize,
 } from './SalaryWorkspace';
@@ -69,7 +69,7 @@ export function DelegatedSalaryWorkspace({
   mode: 'single' | 'batch';
   selfMode?: boolean;
 }) {
-  const naturalMonth = currentMonth();
+  const naturalMonth = defaultPayrollMonth();
   const [month, setMonth] = useState(naturalMonth);
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [targetUserId, setTargetUserId] = useState('');
@@ -399,7 +399,7 @@ function SingleWorkspace({
       <div><h2 className="workspace-panel-title">他人单条申报</h2></div>
       <div className="heading-actions">
         <TargetPicker users={users} value={targetUserId} onChange={setTargetUserId} disabled={busy} />
-        <label className="month-picker"><span>申报月份</span><input type="month" value={month} disabled={busy} onBlur={(event) => { event.currentTarget.value = month; }} onChange={(event) => { const next = event.target.value || currentMonth(); event.target.value = month; setMonth(next); }} /></label>
+        <label className="month-picker"><span>申报月份</span><input type="month" value={month} disabled={busy} onBlur={(event) => { event.currentTarget.value = month; }} onChange={(event) => { const next = event.target.value || defaultPayrollMonth(); event.target.value = month; setMonth(next); }} /></label>
         <button type="button" className="secondary-button button-with-icon" disabled={busy || !targetUserId} onClick={onRefresh}><RefreshCw size={15} />刷新</button>
         <button type="button" className="primary-button" disabled={busy || !target || target.status !== 'active'} onClick={onNew}>+新增一条</button>
       </div>
@@ -473,7 +473,7 @@ function BatchWorkspace({
   setNoticeTone: (value: 'success' | 'error' | 'info') => void;
   refreshTarget: (quiet?: boolean, expectedSelectionRevision?: number) => Promise<boolean>;
 }) {
-  const range = monthDateRange(month) ?? monthDateRange(currentMonth())!;
+  const range = monthDateRange(month) ?? monthDateRange(defaultPayrollMonth())!;
   const [batchMode, setBatchMode] = useState<PayrollBatchMode>('fixed');
   const [template, setTemplate] = useState<SalaryRecord>(() => ({...defaultTargetRecord(targetUserId, month, departments, workManagers, currentUserId), includeTravel: false}));
   const [fixed, setFixed] = useState<FixedPayrollSchedule>(() => defaultFixedSchedule(month));
@@ -493,7 +493,7 @@ function BatchWorkspace({
   const updateTemplate = <K extends keyof SalaryRecord>(field: K, value: SalaryRecord[K]) => {
     setTemplate((current) => {
       const next = { ...current, [field]: value };
-      if (field === 'currency' && value !== current.currency) next.includeTravel = false;
+      if (field === 'currency' && value !== current.currency) {next.includeTravel = false; next.includeSubsidies = false;}
       if (field === 'departmentKey') next.departmentLabel = departments.find((item) => item.key === value)?.label ?? '';
       if (field === 'checkUserId') next.checkUser = workManagers.find((item) => item.id === value)?.label ?? '';
       if (field === 'applyType' && value !== 1 && value !== 7) next.restHours = 0;
@@ -551,7 +551,9 @@ function BatchWorkspace({
         body: input,
       });
       setRequestId(newBatchRequestId());
-      setSavedSnapshot(formSnapshot);
+      const nextTemplate = recalculateRecord({...template, miscFee: 0});
+      setTemplate(nextTemplate);
+      setSavedSnapshot(JSON.stringify({template: nextTemplate, fixed, calendarSessions, batchMode, submitNow, saveRule, ruleTitle, ruleEndMonth}));
       if (!await refreshTarget(true, selectionRevision)) {
         if (isSelectionCurrent(selectionRevision)) { setNoticeTone('info'); setNotice('工资已保存，但列表刷新失败。请点击刷新核对。'); }
         return;
@@ -638,7 +640,7 @@ function BatchWorkspace({
       <div className="heading-actions">
         <button type="button" className="secondary-button button-with-icon" disabled={busy} onClick={() => void refreshTarget()}><RefreshCw size={15} />刷新</button>
         <TargetPicker users={users} value={targetUserId} onChange={setTargetUserId} disabled={busy} />
-        <label className="month-picker"><span>申报月份</span><input type="month" value={month} disabled={busy} onBlur={(event) => { event.currentTarget.value = month; }} onChange={(event) => { const next = event.target.value || currentMonth(); event.target.value = month; setMonth(next); }} /></label>
+        <label className="month-picker"><span>申报月份</span><input type="month" value={month} disabled={busy} onBlur={(event) => { event.currentTarget.value = month; }} onChange={(event) => { const next = event.target.value || defaultPayrollMonth(); event.target.value = month; setMonth(next); }} /></label>
       </div>
     </div>
     {target && (!target.profileReady || target.status !== 'active') && <StatusMessage
@@ -714,7 +716,7 @@ function BatchWorkspace({
           </div>
           {showTime && <div className="form-grid form-grid--three">
             <TimeField label="开始时间" value={fixed.startTime} onChange={(value) => setFixed((current) => ({ ...current, startTime: value }))} />
-            <TimeField label="结束时间" value={fixed.endTime} onChange={(value) => setFixed((current) => ({ ...current, endTime: value }))} />
+            <TimeField label="结束时间" allowEndOfDay value={fixed.endTime} onChange={(value) => setFixed((current) => ({ ...current, endTime: value }))} />
             <RestField value={fixed.restHours} onChange={(value) => setFixed((current) => ({ ...current, restHours: value }))} />
           </div>}
           <label className="check-row"><input type="checkbox" checked={saveRule} onChange={(event) => setSaveRule(event.target.checked)} />保存为每月自动规律</label>
@@ -805,13 +807,13 @@ function CalendarSessions({
   sessions: PayrollScheduleSession[];
   onChange: (sessions: PayrollScheduleSession[]) => void;
 }) {
-  const range = monthDateRange(month) ?? monthDateRange(currentMonth())!;
+  const range = monthDateRange(month) ?? monthDateRange(defaultPayrollMonth())!;
   const update = (index: number, values: Partial<PayrollScheduleSession>) => onChange(sessions.map((session, itemIndex) => itemIndex === index ? { ...session, ...values } : session));
   return <div className="calendar-session-list">
     {sessions.map((session, index) => <div className="calendar-session-row" key={index}>
       <Field label="日期" required><input type="date" min={range.start} max={range.end} value={session.workDate} onChange={(event) => update(index, { workDate: event.target.value })} required /></Field>
       {showTime && <TimeField label="开始" value={session.startTime} onChange={(value) => update(index, { startTime: value })} />}
-      {showTime && <TimeField label="结束" value={session.endTime} onChange={(value) => update(index, { endTime: value })} />}
+      {showTime && <TimeField label="结束" allowEndOfDay value={session.endTime} onChange={(value) => update(index, { endTime: value })} />}
       {showTime && <RestField value={session.restHours} onChange={(value) => update(index, { restHours: value })} />}
       <button type="button" className="icon-button" aria-label="删除这个时段" disabled={sessions.length === 1} onClick={() => onChange(sessions.filter((_, itemIndex) => itemIndex !== index))}>×</button>
     </div>)}
@@ -824,11 +826,8 @@ function CalendarSessions({
   </div>;
 }
 
-function TimeField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return <Field label={label} required><select value={value} onChange={(event) => onChange(event.target.value)} required>
-    <option value="">请选择</option>
-    {TIME_OPTIONS.map((time) => <option key={time} value={time}>{time}</option>)}
-  </select></Field>;
+function TimeField({ label, value, onChange, allowEndOfDay = false }: { label: string; value: string; onChange: (value: string) => void; allowEndOfDay?: boolean }) {
+  return <Field label={label} required><TimeInput label={label} required allowEndOfDay={allowEndOfDay} value={value} onChange={onChange} /></Field>;
 }
 
 function RestField({ value, onChange }: { value: number; onChange: (value: number) => void }) {
@@ -863,7 +862,7 @@ function defaultTargetRecord(
 }
 
 function defaultFixedSchedule(month: string): FixedPayrollSchedule {
-  const range = monthDateRange(month) ?? monthDateRange(currentMonth())!;
+  const range = monthDateRange(month) ?? monthDateRange(defaultPayrollMonth())!;
   return {
     rangeStart: range.start,
     rangeEnd: range.end,

@@ -76,6 +76,7 @@ export type Profile = {
 
 export type SalaryRecord = {
   includeTravel?: boolean;
+  includeSubsidies?: boolean;
   voidedAt?: string;
   voidedByUserId?: string;
   voidReason?: string;
@@ -101,6 +102,8 @@ export type SalaryRecord = {
   travelStart: string;
   travelEnd: string;
   travelFee: number;
+  mealFee?: number;
+  miscFee?: number;
   totalHours: number;
   workHours: number;
   restHours: number;
@@ -467,6 +470,15 @@ export function currentMonth() {
   return today().slice(0, 7);
 }
 
+// Filing and review use the previous payroll month through the Japan-time deadline.
+// Keep currentMonth() as the calendar month for audit and recurring schedules.
+export function defaultPayrollMonth(now = new Date()) {
+  const date = dateInJapan(now);
+  if (Number(date.slice(8, 10)) > 3) return date.slice(0, 7);
+  const [year, month] = date.split('-').map(Number);
+  return `${month === 1 ? year - 1 : year}-${String(month === 1 ? 12 : month - 1).padStart(2, '0')}`;
+}
+
 export function createRecord(userId: string): SalaryRecord {
   const timestamp = new Date().toISOString();
   return {
@@ -488,6 +500,8 @@ export function createRecord(userId: string): SalaryRecord {
     travelStart: '',
     travelEnd: '',
     travelFee: 0,
+    mealFee: 0,
+    miscFee: 0,
     totalHours: 0,
     workHours: 0,
     restHours: 0,
@@ -509,8 +523,11 @@ export function createRecord(userId: string): SalaryRecord {
 }
 
 export function recalculateRecord(record: SalaryRecord): SalaryRecord {
-  if (record.includeTravel === false || ![1, 2, 3, 5].includes(record.applyType)) {
-    record = { ...record, includeTravel: false, travelStart: '-', travelEnd: '-', travelFee: 0 };
+  const included = record.includeSubsidies === false || record.includeTravel === false ? false : record.includeSubsidies ?? record.includeTravel;
+  if (included === false || ![1, 2, 3, 5].includes(record.applyType)) {
+    record = { ...record, includeSubsidies: false, includeTravel: false, travelStart: '-', travelEnd: '-', travelFee: 0, mealFee: 0, miscFee: 0 };
+  } else {
+    record = { ...record, mealFee: numberOrZero(record.mealFee ?? 0), miscFee: numberOrZero(record.miscFee ?? 0) };
   }
   const hasTime = record.applyType === 1 || record.applyType === 7;
   const totalMinutes = hasTime ? getWorkMinutes(record.startTime, record.endTime) : 0;
@@ -549,7 +566,7 @@ export function recalculateRecord(record: SalaryRecord): SalaryRecord {
     totalHours,
     workHours,
     restHours,
-    finalSalary: Number.isFinite(finalSalary) ? Math.floor(finalSalary) : 0,
+    finalSalary: Number.isFinite(finalSalary) ? Math.floor(finalSalary + numberOrZero(record.mealFee ?? 0) + numberOrZero(record.miscFee ?? 0)) : 0,
   };
 }
 
@@ -682,6 +699,7 @@ export function cloneAsDraft(record: SalaryRecord, userId: string) {
   return recalculateRecord({
     ...record,
     includeTravel: false,
+    includeSubsidies: false,
     voidedAt: undefined,
     voidedByUserId: undefined,
     voidReason: undefined,

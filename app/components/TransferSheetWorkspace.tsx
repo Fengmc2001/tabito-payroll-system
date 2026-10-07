@@ -7,13 +7,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Download, Paperclip } from 'lucide-react';
 import { useFeedback } from './interaction-guards';
 import { ApiClientError, apiRequest } from '../lib/api-client';
-import { AccountRole, CurrencyAmounts, TransferSheetRow, currentMonth, monthIsValid, effectivePayee } from '../lib/payroll';
+import { AccountRole, CurrencyAmounts, TransferSheetRow, defaultPayrollMonth, monthIsValid, effectivePayee } from '../lib/payroll';
+import {buildPayrollWorkbook} from '../lib/payroll-export';
 import { CurrencyAmountsView, Money } from './payroll-ui';
 import { StatusMessage } from './form-controls';
 
 export function TransferSheetWorkspace({role = 'admin'}: {role?: AccountRole}) {
   const [scope, setScope] = useState(role === 'reviewer' ? 'assigned' : role === 'employee' ? 'granted' : 'all');
-  const [month, setMonth] = useState(currentMonth);
+  const [month, setMonth] = useState(defaultPayrollMonth);
   const [rows, setRows] = useState<TransferSheetRow[]>([]);
   const [loadedMonth, setLoadedMonth] = useState('');
   const [loading, setLoading] = useState(true);
@@ -90,7 +91,7 @@ export function TransferSheetWorkspace({role = 'admin'}: {role?: AccountRole}) {
         </select></label>
         <label className="month-picker">
           <span>查看月份</span>
-          <input type="month" disabled={exporting} value={month} onBlur={(event) => { event.currentTarget.value = month; }} onChange={(event) => { const next = event.target.value || currentMonth(); if (!monthIsValid(next)) { event.target.value = month; setMessage('请选择有效月份。'); return; } event.target.value = next; if (next === month) return; setLoading(true); setMonth(next); }} />
+          <input type="month" disabled={exporting} value={month} onBlur={(event) => { event.currentTarget.value = month; }} onChange={(event) => { const next = event.target.value || defaultPayrollMonth(); if (!monthIsValid(next)) { event.target.value = month; setMessage('请选择有效月份。'); return; } event.target.value = next; if (next === month) return; setLoading(true); setMonth(next); }} />
         </label>
         <button type="button" className="secondary-button" disabled={loading || exporting} onClick={() => void load(month)}>刷新</button>
         <button
@@ -146,37 +147,15 @@ function sumApproved(rows: TransferSheetRow[], currency: keyof CurrencyAmounts) 
 }
 
 function downloadTransferSheet(rows: TransferSheetRow[], month: string) {
-  const headers = ['员工姓名', '联系方式', '收款方式', '收款单位', '支店', '收款账号', '账户名', '收款人姓名', '收款人证件号', `${month} 日元 JPY`, `${month} 人民币 CNY`];
-  const body = rows.map((row) => [
-    row.user.displayName,
-    row.profile.tel,
-    paymentMethodLabel(row.profile.bankType),
-    row.profile.bankName,
-    row.profile.bankBranch,
-    row.profile.bankAccountNumber,
-    row.profile.bankAccountHolder,
-    effectivePayee(row.profile, row.user.displayName).name,
-    effectivePayee(row.profile, row.user.displayName).idNumber,
-    row.approvedAmounts.JPY,
-    row.approvedAmounts.CNY,
-  ]);
-  const xmlRows = [headers, ...body].map((row) => `<Row>${row.map((cell) => {
-    const type = typeof cell === 'number' ? 'Number' : 'String';
-    return `<Cell><Data ss:Type="${type}">${escapeXml(String(cell))}</Data></Cell>`;
-  }).join('')}</Row>`).join('');
-  const workbook = `<?xml version="1.0" encoding="UTF-8"?><?mso-application progid="Excel.Sheet"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Worksheet ss:Name="${escapeXml(month)}"><Table>${xmlRows}</Table></Worksheet></Workbook>`;
-  const url = URL.createObjectURL(new Blob([workbook], { type: 'application/vnd.ms-excel;charset=utf-8' }));
+  const workbook = buildPayrollWorkbook(rows, month);
+  const url = URL.createObjectURL(new Blob([new Uint8Array(workbook).buffer], {type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = `旅人教育-工资汇总-${month}.xls`;
+  anchor.download = `旅人教育-工资汇总-${month}.xlsx`;
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-function escapeXml(value: string) {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }
 
 function errorText(error: unknown) {

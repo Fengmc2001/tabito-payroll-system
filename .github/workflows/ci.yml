@@ -24,6 +24,8 @@ jobs:
       - run: npm run self-check:timezone
       - run: npm run self-check:audit-fixes
       - run: npm run self-check:deployment
+      - run: npm run self-check:preserve-deployment
+      - run: npm run self-check:october
       - run: npm run self-check:delegated-ui
       - run: npm run self-check:review-table
       - run: npm run self-check:brand
@@ -36,6 +38,8 @@ jobs:
           PAYROLL_LOCAL_STATE_PATH: .local/ci-audit
         run: npm run db:migrate:local
       - run: npm run build
+      - name: Install isolated browser for UI regression
+        run: npx playwright install --with-deps chromium
       - name: Backend and role regression
         shell: bash
         # This fixed value protects only the disposable CI database. Production
@@ -73,4 +77,7 @@ jobs:
           PAYROLL_TEST_BASE_URL=http://localhost:3200 npm run self-check:travel-draft
           PAYROLL_TEST_BASE_URL=http://localhost:3200 npm run self-check:review-table-api
           PAYROLL_TEST_BASE_URL=http://localhost:3200 npm run self-check:profile-details
+          PAYROLL_TEST_BASE_URL=http://localhost:3200 npm run self-check:subsidies
+          PAYROLL_TEST_BASE_URL=http://localhost:3200 npm run self-check:october-browser
+          PAYROLL_LOCAL_STATE_PATH=.local/ci-audit npm run self-check:reinstall-local
           curl --fail --silent --show-error http://localhost:3200/cdn-cgi/local/scheduled > /dev/null

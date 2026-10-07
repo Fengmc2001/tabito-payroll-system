@@ -1,6 +1,8 @@
 'use client';
 
 import { ReviewTable } from './ReviewTable';
+import { ReviewAccountPicker } from './ReviewAccountPicker';
+import { reviewAccountOptions } from '../lib/review-accounts';
 import { ReviewFailure, ReviewRejectDialog } from './ReviewRejectDialog';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -11,7 +13,7 @@ import {
   CurrencyAmounts,
   ReviewSalaryItem,
   SalaryStatus,
-  currentMonth,
+  defaultPayrollMonth,
   emptyCurrencyAmounts,
 } from '../lib/payroll';
 import { AuditTrailPanel, CurrencyAmountsView } from './payroll-ui';
@@ -25,7 +27,7 @@ export function ReviewWorkspace({ administrator = false }: {administrator?: bool
   const [filter, setFilter] = useState<Filter>('all');
   const archiveMode = administrator && filter === 'voided';
   const [needsAssignment, setNeedsAssignment] = useState(false);
-  const [month, setMonth] = useState(currentMonth);
+  const [month, setMonth] = useState(defaultPayrollMonth);
   const [selectedUserId, setSelectedUserId] = useState('');
   const [rejectItem, setRejectItem] = useState<ReviewSalaryItem|null>(null);
   const [loading, setLoading] = useState(true);
@@ -88,16 +90,7 @@ export function ReviewWorkspace({ administrator = false }: {administrator?: bool
     return () => { requestRevision.current += 1; };
   }, [setMessage, archiveMode]);
 
-  const accountOptions = useMemo(() => {
-    const users = new Map<string, ReviewSalaryItem['user']>();
-    for (const item of items) users.set(item.user.id, item.user);
-    return [...users.values()].sort((left, right) => left.displayName.localeCompare(right.displayName, 'zh-CN'));
-  }, [items]);
-  const duplicateEmployeeNames = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const user of accountOptions) counts.set(user.displayName, (counts.get(user.displayName) ?? 0) + 1);
-    return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
-  }, [accountOptions]);
+  const accountOptions = useMemo(() => reviewAccountOptions(items, month), [items, month]);
   const accountMonthItems = useMemo(
     () => items.filter((item) => item.record.workDate.startsWith(month)
       && (!selectedUserId || item.user.id === selectedUserId)
@@ -155,16 +148,8 @@ export function ReviewWorkspace({ administrator = false }: {administrator?: bool
           <h1>工资审核工作台</h1>
         </div>
         <div className="heading-actions">
-          <label className="review-account-picker">
-            <span>查看账号</span>
-            <select value={selectedUserId} disabled={interactionLocked} onChange={(event) => setSelectedUserId(event.target.value)}>
-              <option value="">{administrator ? '全部账号' : '全部可审核账号'}</option>
-              {accountOptions.map((user) => <option key={user.id} value={user.id}>
-                {user.displayName}{duplicateEmployeeNames.has(user.displayName) ? ` · ${user.email}` : ''}
-              </option>)}
-            </select>
-          </label>
-          <label className="month-picker"><span>工作月份</span><input type="month" value={month} disabled={interactionLocked} onChange={(event) => setMonth(event.target.value || currentMonth())} /></label>
+          <ReviewAccountPicker key={month} options={accountOptions} value={selectedUserId} disabled={interactionLocked} administrator={administrator} month={month} onChange={setSelectedUserId}/>
+          <label className="month-picker"><span>工作月份</span><input type="month" value={month} disabled={interactionLocked} onChange={(event) => setMonth(event.target.value || defaultPayrollMonth())} /></label>
           <button type="button" className="secondary-button" onClick={() => void load()} disabled={interactionLocked}>刷新</button>
         </div>
       </div>
