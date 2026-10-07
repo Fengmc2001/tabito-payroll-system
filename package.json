@@ -44,6 +44,7 @@
     "self-check:october": "tsx scripts/october-self-check.mjs",
     "self-check:subsidies": "tsx scripts/subsidy-self-check.mjs",
     "self-check:october-browser": "tsx scripts/october-browser-self-check.mjs",
+    "self-check:mobile-employee": "tsx scripts/mobile-employee-self-check.mjs",
     "self-check:reinstall-local": "node scripts/reinstall-local-self-check.mjs"
   },
   "dependencies": {

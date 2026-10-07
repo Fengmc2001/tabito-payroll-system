@@ -30,6 +30,7 @@ export function TimeInput({value, onChange, label, required = false, allowEndOfD
     <input className="time-input__validation" tabIndex={-1} aria-label={`${label}数值`} required={required} value={value} onChange={() => {}}
       onInvalid={event => {event.preventDefault(); setDraft(value || '12:00'); setOpen(true);}} />
     {open && <div className="time-input__popover" role="group" aria-label={`${label}选择`}>
+      <p className="time-input__label">{label}</p>
       <div className="time-input__parts">
         <select ref={hour} aria-label={`${label}小时`} value={hours} onChange={e => setDraft(`${e.target.value}:${e.target.value === '24' ? '00' : minutes}`)}>{(allowEndOfDay ? HOURS : HOURS.slice(0, -1)).map(item => <option key={item}>{item}</option>)}</select>
         <span>:</span>

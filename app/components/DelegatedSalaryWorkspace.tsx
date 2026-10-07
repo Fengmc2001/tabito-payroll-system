@@ -518,6 +518,7 @@ function BatchWorkspace({
 
   const submitBatch = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (busy) return;
     if (!targetUserId || !target) {
       setNoticeTone('error');
       setNotice('请选择申报对象。');
@@ -648,10 +649,11 @@ function BatchWorkspace({
       message={target.status !== 'active' ? '该账号已停用，不能新增工资。' : '该员工的收款资料尚未完成；可保存草稿，暂不能直接提交审核。'}
     />}
     <StatusMessage message={notice} tone={noticeTone} eventId={noticeRevision} />
-    <form className="batch-payroll-form" onSubmit={submitBatch} onInvalidCapture={(event) => {
+    <form className="batch-payroll-form" aria-busy={busy} onSubmit={submitBatch} onInvalidCapture={(event) => {
       setNoticeTone('error');
       setNotice(invalidFormControlMessage(event));
     }}>
+      <fieldset className="form-operation-fields" disabled={busy}>
       <FormSection title="工资内容">
         <div className="form-grid form-grid--three">
           <Field label="工作负责人" required>
@@ -686,7 +688,7 @@ function BatchWorkspace({
             <input maxLength={SALARY_TEXT_MAX_LENGTH} value={template.workContent} onChange={(event) => updateTemplate('workContent', event.target.value)} required={template.applyType === 7} />
           </Field>
           <Field label="备注"><input maxLength={SALARY_TEXT_MAX_LENGTH} value={template.memo} onChange={(event) => updateTemplate('memo', event.target.value)} /></Field>
-          {[1, 2, 3, 5].includes(template.applyType) && <TravelFields key={`${template.userId}-${template.currency}`} record={template} batch onChange={(travel) => setTemplate((current) => recalculateRecord({...current, ...travel}))} />}
+          {[1, 2, 3, 5].includes(template.applyType) && <TravelFields key={`${template.userId}-${template.currency}-${requestId}`} record={template} batch onChange={(travel) => setTemplate((current) => recalculateRecord({...current, ...travel}))} />}
         </div>
       </FormSection>
 
@@ -755,6 +757,7 @@ function BatchWorkspace({
           {busy ? '处理中…' : `生成 ${preview.length} 条记录`}
         </button>
       </div>
+      </fieldset>
     </form>
 
     <section className="recurring-rules-section">
